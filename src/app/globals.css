@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+:root {
+  --gold: #D4AF37;
+  --gold-light: #FFD700;
+  --gold-dark: #B8860B;
+  --bg-deep: #020617;
+  --glass: rgba(15, 23, 42, 0.7);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  height: 100dvh;
+}
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background-color: #020617;
+  color: #f8fafc;
+  overflow-x: hidden;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.glass {
+  background: rgba(15, 23, 42, 0.7);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(212, 175, 55, 0.15);
+}
+
+.gold-text {
+  color: #D4AF37;
+}
+
+.gradient-gold {
+  background: linear-gradient(135deg, #FFD700 0%, #D4AF37 50%, #B8860B 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.bg-gold {
+  background: linear-gradient(135deg, #FFD700 0%, #D4AF37 100%);
+}
+
+.card-shadow {
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.7), 0 10px 10px -5px rgba(0,0,0,0.5);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cardEnter {
+  0%   { opacity: 0; transform: rotateY(-10deg) scale(0.9) translateY(20px); }
+  100% { opacity: 1; transform: rotateY(0) scale(1) translateY(0); }
+}
+
+.animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+.card-enter       { animation: cardEnter 0.5s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
