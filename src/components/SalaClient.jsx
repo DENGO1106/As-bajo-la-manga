@@ -64,12 +64,15 @@ export default function SalaClient() {
     setIsLoadingCards(false);
   };
 
+  const [isConnecting, setIsConnecting] = useState(false);
+
   // -----------------------------------------------------
   // 1. INICIAR CONEXIÓN (Crear o Unirse)
   // -----------------------------------------------------
   const conectar = async (crear) => {
     if (!apodo.trim()) return;
     setError('');
+    setIsConnecting(true);
     
     // Limpiar el código de espacios que meten los teclados de celular
     const codigoLimpio = codigoSala.trim().toUpperCase();
@@ -77,15 +80,15 @@ export default function SalaClient() {
     
     if (!crear && codigoFinal.length !== 4) {
       setError('El código debe tener exactamente 4 letras o números');
+      setIsConnecting(false);
       return;
     }
 
     setCodigoSala(codigoFinal);
     setEsHost(crear);
-    setFase('lobby');
 
     if (crear) {
-      // Cargar las cartas del modo inicial al crear
+      setFase('lobby');
       cargarJuego(modoInicial);
     }
 
@@ -104,12 +107,25 @@ export default function SalaClient() {
       }
     });
 
+    // Timeout de seguridad si el celular se queda pegado negociando
+    let connectionTimeout;
+    if (!crear) {
+      connectionTimeout = setTimeout(() => {
+        if (faseRef.current === 'menu') {
+          setError('Tiempo de espera agotado. Verifica el código o tu conexión.');
+          setIsConnecting(false);
+          newPeer.destroy();
+        }
+      }, 10000); // 10 segundos
+    }
+
     newPeer.on('open', () => {
       setPeer(newPeer);
 
       if (crear) {
         // HOST: Espera conexiones
         setJugadores([{ id: peerId, apodo, esHost: true }]);
+        setIsConnecting(false);
         newPeer.on('connection', (conn) => {
           conn.on('open', () => {
             connListRef.current = [...connListRef.current, conn];
@@ -134,18 +150,24 @@ export default function SalaClient() {
         // JUGADOR: Se conecta al host
         const conn = newPeer.connect(`ablm-host-${codigoFinal}`);
         conn.on('open', () => {
+          clearTimeout(connectionTimeout);
           hostConnRef.current = conn;
+          setFase('lobby');
+          setIsConnecting(false);
           conn.send({ tipo: 'unirse', apodo });
           conn.on('data', manejarMensajeJugador);
         });
         conn.on('error', () => {
-          setError('No se encontró la sala');
+          clearTimeout(connectionTimeout);
+          setError('Error al conectarse con el anfitrión.');
+          setIsConnecting(false);
           setFase('menu');
         });
         // Si el host cierra la sala
         conn.on('close', () => {
           if (faseRef.current !== 'menu') {
             setError('La sala se cerró o fuiste desconectado.');
+            setIsConnecting(false);
             setFase('menu');
             setPeer(null);
           }
@@ -155,7 +177,9 @@ export default function SalaClient() {
 
     newPeer.on('error', (err) => {
       console.error(err);
-      setError('Error de conexión. ¿El código es correcto?');
+      clearTimeout(connectionTimeout);
+      setError('Error de red o el código no existe.');
+      setIsConnecting(false);
       setFase('menu');
     });
   };
@@ -336,10 +360,10 @@ export default function SalaClient() {
               />
               <button
                 onClick={() => conectar(false)}
-                disabled={!apodo.trim() || codigoSala.length !== 4}
+                disabled={!apodo.trim() || codigoSala.length !== 4 || isConnecting}
                 className="w-1/2 bg-yellow-900/20 text-yellow-400 border border-yellow-600/30 font-black py-3 rounded-xl text-sm disabled:opacity-30 active:scale-95 transition-all hover:bg-yellow-900/40"
               >
-                Unirse 🚀
+                {isConnecting ? '⏳...' : 'Unirse 🚀'}
               </button>
             </div>
           </div>
