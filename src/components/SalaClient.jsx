@@ -95,14 +95,26 @@ export default function SalaClient() {
     const { Peer } = await import('peerjs');
     const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
     
-    // Configuración robusta de red con servidores puente (STUN)
+    // Configuración robusta de red con servidores STUN y TURN
     const newPeer = new Peer(peerId, { 
       debug: 1,
+      secure: true,
       config: {
         iceServers: [
+          // STUN (Para descubrir IPs públicas)
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' }
+          // TURN (Para saltar firewalls pesados y CGNAT de telefonías)
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
         ]
       }
     });
