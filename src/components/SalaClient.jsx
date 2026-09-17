@@ -121,6 +121,12 @@ export default function SalaClient({ cartas, titulo, modo }) {
     connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta: null, turnoIdx: nuevoTurno }));
   }, []);
 
+  const reiniciarLobby = useCallback(() => {
+    setFase('lobby');
+    setCartaActual(null);
+    connListRef.current.forEach(c => c.send({ tipo: 'volver_lobby' }));
+  }, []);
+
   const manejarMensajeHost = useCallback((conn, data) => {
     if (data.tipo === 'unirse') {
       setJugadores(prev => {
@@ -136,6 +142,10 @@ export default function SalaClient({ cartas, titulo, modo }) {
   const manejarMensajeJugador = useCallback((data) => {
     if (data.tipo === 'lista_jugadores') setJugadores(data.jugadores);
     if (data.tipo === 'inicio_juego') setFase('jugando');
+    if (data.tipo === 'volver_lobby') {
+      setFase('lobby');
+      setCartaActual(null);
+    }
     if (data.tipo === 'nueva_carta') {
       setCartaActual(data.carta);
       setTurnoIdx(data.turnoIdx);
@@ -316,6 +326,16 @@ export default function SalaClient({ cartas, titulo, modo }) {
               Turno de {jugadorActual}
             </div>
           )
+        )}
+        
+        {/* Botón para volver al lobby (solo Host) */}
+        {esHost && (
+          <button
+            onClick={reiniciarLobby}
+            className="w-full text-slate-700 hover:text-red-500 text-xs font-bold py-3 mt-4 transition-colors"
+          >
+            🛑 Terminar Partida (Volver a la Sala)
+          </button>
         )}
       </div>
 
