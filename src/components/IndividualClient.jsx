@@ -10,6 +10,10 @@ export default function IndividualClient({ cartas, titulo, modo }) {
   const [cartaActual, setCartaActual] = useState(null);
   const [animKey, setAnimKey] = useState(0);
 
+  // Categorías
+  const categoriasDisponibles = [...new Set(cartas.map(c => c.categoria).filter(Boolean))];
+  const [categoriasActivas, setCategoriasActivas] = useState(categoriasDisponibles);
+
   const barajaRef = useRef([...cartas].sort(() => Math.random() - 0.5));
   const indexRef = useRef(0);
 
@@ -22,10 +26,17 @@ export default function IndividualClient({ cartas, titulo, modo }) {
 
   const iniciarJuego = () => {
     if (jugadores.length < 1) return;
-    barajaRef.current = [...cartas].sort(() => Math.random() - 0.5);
-    indexRef.current = 0;
+    
+    const filtradas = cartas.filter(c => !c.categoria || categoriasActivas.includes(c.categoria));
+    if (filtradas.length === 0) {
+      alert("¡Tenés que seleccionar al menos una categoría!");
+      return;
+    }
+
+    barajaRef.current = [...filtradas].sort(() => Math.random() - 0.5);
+    indexRef.current = 1;
     setTurnoIdx(0);
-    setCartaActual(null);
+    setCartaActual(barajaRef.current[0]);
     setFase('jugando');
   };
 
@@ -80,7 +91,7 @@ export default function IndividualClient({ cartas, titulo, modo }) {
           </div>
 
           {/* Lista jugadores */}
-          <div className="flex flex-col gap-2 mb-8">
+          <div className="flex flex-col gap-2 mb-6">
             {jugadores.map((j, i) => (
               <div key={j} className="glass flex items-center justify-between px-4 py-3 rounded-xl">
                 <div className="flex items-center gap-3">
@@ -94,6 +105,24 @@ export default function IndividualClient({ cartas, titulo, modo }) {
               </div>
             ))}
           </div>
+
+          {/* Categorías */}
+          {categoriasDisponibles.length > 0 && (
+            <div className="glass p-4 rounded-3xl mb-8 border-yellow-600/10">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 text-center">Filtros (Opcional)</h3>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {categoriasDisponibles.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setCategoriasActivas(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat])}
+                    className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${categoriasActivas.includes(cat) ? 'bg-gold text-slate-900 border-transparent shadow-md' : 'bg-[#020617] text-slate-500 border-slate-800'}`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <button
             onClick={iniciarJuego}

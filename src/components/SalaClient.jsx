@@ -123,9 +123,20 @@ export default function SalaClient({ cartas, titulo, modo }) {
   const jugadoresRef = useRef([]);
   useEffect(() => { jugadoresRef.current = jugadores; }, [jugadores]);
 
+  // Categorías
+  const categoriasDisponibles = [...new Set(cartas.map(c => c.categoria).filter(Boolean))];
+  const [categoriasActivas, setCategoriasActivas] = useState(categoriasDisponibles);
+
   const iniciarJuego = () => {
     if (jugadores.length < 1) return;
-    barajaRef.current = [...cartas].sort(() => Math.random() - 0.5);
+    
+    const filtradas = cartas.filter(c => !c.categoria || categoriasActivas.includes(c.categoria));
+    if (filtradas.length === 0) {
+      alert("¡Tenés que seleccionar al menos una categoría!");
+      return;
+    }
+
+    barajaRef.current = [...filtradas].sort(() => Math.random() - 0.5);
     indexRef.current = 1; // Ya sacamos la primera
     
     const cartaInicial = barajaRef.current[0];
@@ -300,6 +311,23 @@ export default function SalaClient({ cartas, titulo, modo }) {
             </div>
             {!esHost && <p className="text-xs text-slate-500 mt-4 animate-pulse">Esperando que el host inicie...</p>}
           </div>
+
+          {esHost && categoriasDisponibles.length > 0 && (
+            <div className="glass p-4 rounded-3xl mb-6 border-yellow-600/10">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 text-center">Filtros (Opcional)</h3>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {categoriasDisponibles.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setCategoriasActivas(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat])}
+                    className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${categoriasActivas.includes(cat) ? 'bg-gold text-slate-900 border-transparent shadow-md' : 'bg-[#020617] text-slate-500 border-slate-800'}`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {esHost && (
             <button
