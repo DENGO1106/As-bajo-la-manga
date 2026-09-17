@@ -21,6 +21,10 @@ export default function SalaClient({ cartas, titulo, modo }) {
   const hostConnRef = useRef(null); // Jugador: conexion al host
   const barajaRef = useRef([]);
   const indexRef = useRef(0);
+  
+  // Referencia de la fase actual para que el Host sepa si bloquear entradas
+  const faseRef = useRef(fase);
+  useEffect(() => { faseRef.current = fase; }, [fase]);
 
   // -----------------------------------------------------
   // 1. INICIAR CONEXIÓN (Crear o Unirse)
@@ -38,10 +42,8 @@ export default function SalaClient({ cartas, titulo, modo }) {
     setEsHost(crear);
     setFase('lobby');
 
-    // Importar PeerJS dinámicamente
     const { Peer } = await import('peerjs');
     const peerId = crear ? `ablm-host-${codigoFinal}-${modo}` : `ablm-${codigoFinal}-${Date.now()}`;
-    
     const newPeer = new Peer(peerId, { debug: 0 });
 
     newPeer.on('open', () => {
@@ -54,6 +56,18 @@ export default function SalaClient({ cartas, titulo, modo }) {
           conn.on('open', () => {
             connListRef.current = [...connListRef.current, conn];
             conn.on('data', (data) => manejarMensajeHost(conn, data));
+          });
+          
+          // Si el jugador se desconecta, quitarlo de la lista
+          conn.on('close', () => {
+            connListRef.current = connListRef.current.filter(c => c.peer !== conn.peer);
+            setJugadores(prev => {
+              const nuevos = prev.filter(j => j.id !== conn.peer);
+              connListRef.current.forEach(c => {
+                if (c.open) c.send({ tipo: 'lista_jugadores', jugadores: nuevos });
+              });
+              return nuevos;
+            });
           });
         });
       } else {
@@ -68,6 +82,14 @@ export default function SalaClient({ cartas, titulo, modo }) {
           setError('No se encontró la sala');
           setFase('menu');
         });
+        // Si el host cierra la sala
+        conn.on('close', () => {
+          if (faseRef.current !== 'menu') {
+            setError('La sala se cerró o fuiste desconectado.');
+            setFase('menu');
+            setPeer(null);
+          }
+        });
       }
     });
 
@@ -76,6 +98,17 @@ export default function SalaClient({ cartas, titulo, modo }) {
       setError('Error de conexión. ¿El código es correcto?');
       setFase('menu');
     });
+  };
+
+  const salirDeSala = () => {
+    if (peer) {
+      peer.destroy(); // Corta todas las conexiones
+      setPeer(null);
+    }
+    setJugadores([]);
+    setCodigoSala('');
+    setCartaActual(null);
+    setFase('menu');
   };
 
   // -----------------------------------------------------
@@ -129,9 +162,17 @@ export default function SalaClient({ cartas, titulo, modo }) {
 
   const manejarMensajeHost = useCallback((conn, data) => {
     if (data.tipo === 'unirse') {
+      if (faseRef.current === 'jugando') {
+        conn.send({ tipo: 'rechazado', mensaje: 'La partida ya comenzó. Esperá a que vuelvan a la sala.' });
+        setTimeout(() => conn.close(), 500); // Darle tiempo para enviar el mensaje
+        return;
+      }
+
       setJugadores(prev => {
         const nuevos = [...prev, { id: conn.peer, apodo: data.apodo, esHost: false }];
-        connListRef.current.forEach(c => c.send({ tipo: 'lista_jugadores', jugadores: nuevos }));
+        connListRef.current.forEach(c => {
+          if (c.open) c.send({ tipo: 'lista_jugadores', jugadores: nuevos });
+        });
         return nuevos;
       });
     }
@@ -140,6 +181,10 @@ export default function SalaClient({ cartas, titulo, modo }) {
   }, [tirarCarta, siguienteTurno]);
 
   const manejarMensajeJugador = useCallback((data) => {
+    if (data.tipo === 'rechazado') {
+      setError(data.mensaje);
+      salirDeSala();
+    }
     if (data.tipo === 'lista_jugadores') setJugadores(data.jugadores);
     if (data.tipo === 'inicio_juego') setFase('jugando');
     if (data.tipo === 'volver_lobby') {
@@ -156,7 +201,7 @@ export default function SalaClient({ cartas, titulo, modo }) {
   const jugadorActual = jugadores[turnoIdx]?.apodo || '';
   const esMiTurno = jugadores[turnoIdx]?.id === peer?.id;
 
-  // Limpiar conexion al salir
+  // Limpiar conexion al salir de la app
   useEffect(() => {
     return () => { if (peer) peer.destroy(); };
   }, [peer]);
@@ -175,7 +220,7 @@ export default function SalaClient({ cartas, titulo, modo }) {
           <h2 className="text-3xl font-black gradient-gold mb-1">{titulo}</h2>
           <p className="text-slate-500 text-sm mb-6">Modo en Sala · Conectate con tus compas</p>
 
-          {error && <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-3 rounded-xl mb-6 text-sm text-center font-bold">{error}</div>}
+          {error && <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-3 rounded-xl mb-6 text-sm text-center font-bold animate-fade-in">{error}</div>}
 
           {/* Paso 1: Apodo (Global) */}
           <div className="glass p-5 rounded-3xl mb-6 border-yellow-600/20">
@@ -242,7 +287,7 @@ export default function SalaClient({ cartas, titulo, modo }) {
           <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-2">Código de Sala</p>
           <h1 className="text-6xl font-black gradient-gold tracking-widest mb-8">{codigoSala}</h1>
 
-          <div className="glass rounded-2xl p-4 mb-8">
+          <div className="glass rounded-2xl p-4 mb-6">
             <h3 className="text-left text-xs font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800 pb-3 mb-3">
               Jugadores ({jugadores.length})
             </h3>
@@ -261,11 +306,15 @@ export default function SalaClient({ cartas, titulo, modo }) {
             <button
               onClick={iniciarJuego}
               disabled={jugadores.length < 1}
-              className="w-full bg-gold text-slate-900 font-black py-4 rounded-2xl text-base disabled:opacity-30 active:scale-95 transition-all shadow-lg shadow-yellow-900/30"
+              className="w-full bg-gold text-slate-900 font-black py-4 rounded-2xl text-base disabled:opacity-30 active:scale-95 transition-all shadow-lg shadow-yellow-900/30 mb-4"
             >
               ¡Iniciar Partida! 🎲
             </button>
           )}
+
+          <button onClick={salirDeSala} className="text-slate-500 hover:text-red-400 text-sm font-bold transition-colors">
+            {esHost ? 'Cerrar Sala' : 'Salir de la Sala'}
+          </button>
         </div>
       </main>
     );
