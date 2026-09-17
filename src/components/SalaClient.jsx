@@ -276,7 +276,7 @@ export default function SalaClient() {
         </div>
         <div className="max-w-sm w-full z-10 animate-fade-in">
           <Link href="/" className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-400 text-sm mb-6 transition-colors">← Volver</Link>
-          <h2 className="text-3xl font-black gradient-gold mb-1">{titulo}</h2>
+          <h2 className="text-3xl font-black gradient-gold mb-1">{tituloJuego}</h2>
           <p className="text-slate-500 text-sm mb-6">Modo en Sala · Conectate con tus compas</p>
 
           {error && <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-3 rounded-xl mb-6 text-sm text-center font-bold animate-fade-in">{error}</div>}
