@@ -160,7 +160,7 @@ export default function SalaClient() {
         });
       } else {
         // JUGADOR: Se conecta al host
-        const conn = newPeer.connect(`ablm-host-${codigoFinal}`);
+        const conn = newPeer.connect(`ablm-host-${codigoFinal}`, { reliable: true });
         conn.on('open', () => {
           clearTimeout(connectionTimeout);
           hostConnRef.current = conn;
@@ -171,7 +171,7 @@ export default function SalaClient() {
         });
         conn.on('error', () => {
           clearTimeout(connectionTimeout);
-          setError('Error al conectarse con el anfitrión.');
+          setError('Error al conectarse con el anfitrión (Signaling falló).');
           setIsConnecting(false);
           setFase('menu');
         });
@@ -190,7 +190,7 @@ export default function SalaClient() {
     newPeer.on('error', (err) => {
       console.error(err);
       clearTimeout(connectionTimeout);
-      setError('Error de red o el código no existe.');
+      setError('Error en el servidor P2P o el código no existe.');
       setIsConnecting(false);
       setFase('menu');
     });
@@ -327,7 +327,10 @@ export default function SalaClient() {
         </div>
         <div className="max-w-sm w-full z-10 animate-fade-in">
           <Link href="/" className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-400 text-sm mb-6 transition-colors">← Volver</Link>
-          <h2 className="text-3xl font-black gradient-gold mb-1">{tituloJuego}</h2>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-3xl font-black gradient-gold">{tituloJuego}</h2>
+            <span className="text-[10px] text-slate-600 font-bold bg-slate-900 px-2 py-1 rounded">v2.1</span>
+          </div>
           <p className="text-slate-500 text-sm mb-6">Modo en Sala · Conectate con tus compas</p>
 
           {error && <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-3 rounded-xl mb-6 text-sm text-center font-bold animate-fade-in">{error}</div>}
