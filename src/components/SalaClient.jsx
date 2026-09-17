@@ -91,7 +91,18 @@ export default function SalaClient() {
 
     const { Peer } = await import('peerjs');
     const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
-    const newPeer = new Peer(peerId, { debug: 0 });
+    
+    // Configuración robusta de red con servidores puente (STUN)
+    const newPeer = new Peer(peerId, { 
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ]
+      }
+    });
 
     newPeer.on('open', () => {
       setPeer(newPeer);
