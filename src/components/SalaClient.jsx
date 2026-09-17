@@ -81,27 +81,6 @@ export default function SalaClient({ cartas, titulo, modo }) {
   // -----------------------------------------------------
   // 2. COMUNICACIÓN (Host <-> Jugadores)
   // -----------------------------------------------------
-  const manejarMensajeHost = useCallback((conn, data) => {
-    if (data.tipo === 'unirse') {
-      setJugadores(prev => {
-        const nuevos = [...prev, { id: conn.peer, apodo: data.apodo, esHost: false }];
-        // Avisar a todos la nueva lista
-        connListRef.current.forEach(c => c.send({ tipo: 'lista_jugadores', jugadores: nuevos }));
-        return nuevos;
-      });
-    }
-  }, []);
-
-  const manejarMensajeJugador = useCallback((data) => {
-    if (data.tipo === 'lista_jugadores') setJugadores(data.jugadores);
-    if (data.tipo === 'inicio_juego') setFase('jugando');
-    if (data.tipo === 'nueva_carta') {
-      setCartaActual(data.carta);
-      setTurnoIdx(data.turnoIdx);
-      setAnimKey(k => k + 1);
-    }
-  }, []);
-
   // -----------------------------------------------------
   // 3. LÓGICA DE JUEGO (Solo el Host la ejecuta)
   // -----------------------------------------------------
@@ -115,8 +94,14 @@ export default function SalaClient({ cartas, titulo, modo }) {
     setFase('jugando');
   };
 
-  const tirarCarta = () => {
-    if (!esHost) return;
+  // Usamos referencias para evitar problemas con callbacks
+  const turnoRef = useRef(0);
+  useEffect(() => { turnoRef.current = turnoIdx; }, [turnoIdx]);
+  const jugadoresRef = useRef([]);
+  useEffect(() => { jugadoresRef.current = jugadores; }, [jugadores]);
+
+  const tirarCarta = useCallback(() => {
+    // La logica ahora usa barajaRef
     const carta = barajaRef.current[indexRef.current % barajaRef.current.length];
     indexRef.current += 1;
     
@@ -124,18 +109,39 @@ export default function SalaClient({ cartas, titulo, modo }) {
     setAnimKey(k => k + 1);
     
     // Avisar a todos
-    connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta, turnoIdx }));
-  };
+    connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta, turnoIdx: turnoRef.current }));
+  }, []);
 
-  const siguienteTurno = () => {
-    if (!esHost) return;
-    const nuevoTurno = (turnoIdx + 1) % jugadores.length;
+  const siguienteTurno = useCallback(() => {
+    const nuevoTurno = (turnoRef.current + 1) % jugadoresRef.current.length;
     setTurnoIdx(nuevoTurno);
     setCartaActual(null);
     
     // Avisar a todos
     connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta: null, turnoIdx: nuevoTurno }));
-  };
+  }, []);
+
+  const manejarMensajeHost = useCallback((conn, data) => {
+    if (data.tipo === 'unirse') {
+      setJugadores(prev => {
+        const nuevos = [...prev, { id: conn.peer, apodo: data.apodo, esHost: false }];
+        connListRef.current.forEach(c => c.send({ tipo: 'lista_jugadores', jugadores: nuevos }));
+        return nuevos;
+      });
+    }
+    if (data.tipo === 'accion_tirar') tirarCarta();
+    if (data.tipo === 'accion_siguiente') siguienteTurno();
+  }, [tirarCarta, siguienteTurno]);
+
+  const manejarMensajeJugador = useCallback((data) => {
+    if (data.tipo === 'lista_jugadores') setJugadores(data.jugadores);
+    if (data.tipo === 'inicio_juego') setFase('jugando');
+    if (data.tipo === 'nueva_carta') {
+      setCartaActual(data.carta);
+      setTurnoIdx(data.turnoIdx);
+      setAnimKey(k => k + 1);
+    }
+  }, []);
 
   const jugadorActual = jugadores[turnoIdx]?.apodo || '';
   const esMiTurno = jugadores[turnoIdx]?.id === peer?.id;
@@ -155,49 +161,58 @@ export default function SalaClient({ cartas, titulo, modo }) {
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-yellow-600/10 rounded-full blur-[100px]"></div>
         </div>
         <div className="max-w-sm w-full z-10 animate-fade-in">
-          <Link href="/" className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-400 text-sm mb-8 transition-colors">← Volver</Link>
+          <Link href="/" className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-400 text-sm mb-6 transition-colors">← Volver</Link>
           <h2 className="text-3xl font-black gradient-gold mb-1">{titulo}</h2>
-          <p className="text-slate-500 text-sm mb-8">Modo en Sala · Conectate con tus compas</p>
+          <p className="text-slate-500 text-sm mb-6">Modo en Sala · Conectate con tus compas</p>
 
           {error && <div className="bg-red-900/30 border border-red-500/30 text-red-400 p-3 rounded-xl mb-6 text-sm text-center font-bold">{error}</div>}
 
-          <input
-            type="text"
-            maxLength={15}
-            placeholder="Tu apodo..."
-            value={apodo}
-            onChange={e => setApodo(e.target.value)}
-            className="w-full glass text-white px-4 py-3.5 rounded-2xl focus:outline-none focus:border-yellow-600/40 transition-all text-sm placeholder:text-slate-600 mb-6"
-          />
-
-          <button
-            onClick={() => conectar(true)}
-            disabled={!apodo.trim()}
-            className="w-full bg-gold text-slate-900 font-black py-4 rounded-2xl text-base disabled:opacity-30 active:scale-95 transition-all shadow-lg shadow-yellow-900/30 mb-8"
-          >
-            Crear Nueva Sala
-          </button>
-
-          <div className="relative border-t border-slate-800/60 mb-8">
-            <span className="absolute left-1/2 -translate-x-1/2 -top-3 bg-[#020617] px-4 text-xs font-bold text-slate-600">O UNITE A UNA</span>
-          </div>
-
-          <div className="flex gap-2">
+          {/* Paso 1: Apodo (Global) */}
+          <div className="glass p-5 rounded-3xl mb-6 border-yellow-600/20">
+            <label className="block text-xs font-bold text-yellow-500 uppercase tracking-widest mb-3">Paso 1: ¿Quién sos?</label>
             <input
               type="text"
-              maxLength={4}
-              placeholder="CÓDIGO"
-              value={codigoSala}
-              onChange={e => setCodigoSala(e.target.value.toUpperCase())}
-              className="w-1/2 glass text-center font-black text-white px-4 py-3.5 rounded-2xl focus:outline-none focus:border-yellow-600/40 transition-all text-lg placeholder:text-slate-600"
+              maxLength={15}
+              placeholder="Escribí tu apodo..."
+              value={apodo}
+              onChange={e => setApodo(e.target.value)}
+              className="w-full bg-[#020617] border border-slate-800 text-white px-4 py-3.5 rounded-2xl focus:outline-none focus:border-yellow-600/40 transition-all text-sm placeholder:text-slate-600"
             />
+          </div>
+
+          {/* Paso 2: Acción */}
+          <div className="glass p-5 rounded-3xl border-yellow-600/20">
+            <label className="block text-xs font-bold text-yellow-500 uppercase tracking-widest mb-4">Paso 2: ¿Qué vas a hacer?</label>
+            
             <button
-              onClick={() => conectar(false)}
-              disabled={!apodo.trim() || codigoSala.length !== 4}
-              className="w-1/2 glass text-yellow-400 border-yellow-600/30 font-black py-3.5 rounded-2xl text-sm disabled:opacity-30 active:scale-95 transition-all hover:bg-yellow-900/20"
+              onClick={() => conectar(true)}
+              disabled={!apodo.trim()}
+              className="w-full bg-gold text-slate-900 font-black py-3.5 rounded-2xl text-sm disabled:opacity-30 active:scale-95 transition-all shadow-lg shadow-yellow-900/30 mb-6"
             >
-              Unirse
+              👑 Crear Nueva Sala
             </button>
+
+            <div className="relative border-t border-slate-800/60 mb-6">
+              <span className="absolute left-1/2 -translate-x-1/2 -top-2.5 bg-[#0f172a] px-3 text-[10px] font-bold text-slate-500 rounded-full">O UNITE A UNA</span>
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                maxLength={4}
+                placeholder="CÓDIGO"
+                value={codigoSala}
+                onChange={e => setCodigoSala(e.target.value.toUpperCase())}
+                className="w-1/2 bg-[#020617] border border-slate-800 text-center font-black text-white px-4 py-3 rounded-xl focus:outline-none focus:border-yellow-600/40 transition-all text-base placeholder:text-slate-600"
+              />
+              <button
+                onClick={() => conectar(false)}
+                disabled={!apodo.trim() || codigoSala.length !== 4}
+                className="w-1/2 bg-yellow-900/20 text-yellow-400 border border-yellow-600/30 font-black py-3 rounded-xl text-sm disabled:opacity-30 active:scale-95 transition-all hover:bg-yellow-900/40"
+              >
+                Unirse 🚀
+              </button>
+            </div>
           </div>
         </div>
       </main>
@@ -281,20 +296,26 @@ export default function SalaClient({ cartas, titulo, modo }) {
       </div>
 
       <div className="flex flex-col gap-3 w-full max-w-[300px] z-10">
-        {esHost ? (
-          !cartaActual ? (
-            <button onClick={tirarCarta} className="w-full bg-gold text-slate-900 font-black text-lg py-4 rounded-2xl shadow-lg shadow-yellow-900/30 active:scale-95 transition-all">
-              🎲 Tirar Carta
+        {!cartaActual ? (
+          (esHost || esMiTurno) ? (
+            <button onClick={() => esHost ? tirarCarta() : hostConnRef.current?.send({ tipo: 'accion_tirar' })} className="w-full bg-gold text-slate-900 font-black text-lg py-4 rounded-2xl shadow-lg shadow-yellow-900/30 active:scale-95 transition-all">
+              🎲 {esMiTurno ? 'Tirar Carta' : 'Forzar Carta'}
             </button>
           ) : (
-            <button onClick={siguienteTurno} className="w-full glass text-white font-black text-base py-4 rounded-2xl active:scale-95 transition-all">
-              Siguiente turno →
-            </button>
+            <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
+              Esperando a {jugadorActual}...
+            </div>
           )
         ) : (
-          <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
-            {esMiTurno ? '¡El host sacará tu carta!' : 'Solo el host controla las cartas'}
-          </div>
+          (esHost || esMiTurno) ? (
+            <button onClick={() => esHost ? siguienteTurno() : hostConnRef.current?.send({ tipo: 'accion_siguiente' })} className="w-full glass text-white font-black text-base py-4 rounded-2xl active:scale-95 transition-all">
+              {esMiTurno ? 'Siguiente turno →' : 'Forzar Siguiente →'}
+            </button>
+          ) : (
+            <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
+              Turno de {jugadorActual}
+            </div>
+          )
         )}
       </div>
 
