@@ -51,7 +51,7 @@ export default function Home() {
                   <span>Individual</span>
                 </Link>
                 <Link
-                  href={`/jugar/${modo.id}/sala`}
+                  href={`/sala?modo=${modo.id}`}
                   className="flex flex-col items-center gap-1 py-4 text-sm font-bold text-slate-400 hover:text-yellow-400 hover:bg-yellow-900/20 active:bg-yellow-900/30 transition-all"
                 >
                   <span className="text-xl">📱</span>

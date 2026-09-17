@@ -1,8 +1,12 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
-export default function SalaClient({ cartas, titulo, modo }) {
+export default function SalaClient() {
+  const searchParams = useSearchParams();
+  const modoInicial = searchParams.get('modo') || 'osc';
+  
   const [fase, setFase] = useState('menu'); // menu | lobby | jugando
   const [apodo, setApodo] = useState('');
   const [codigoSala, setCodigoSala] = useState('');
@@ -10,6 +14,14 @@ export default function SalaClient({ cartas, titulo, modo }) {
   const [jugadores, setJugadores] = useState([]);
   const [error, setError] = useState('');
   
+  // Estado de la sala universal
+  const [modoSeleccionado, setModoSeleccionado] = useState(modoInicial);
+  const [tituloJuego, setTituloJuego] = useState('As Bajo La Manga');
+  const [cartasData, setCartasData] = useState([]);
+  const [isLoadingCards, setIsLoadingCards] = useState(false);
+  const [categoriasDisponibles, setCategoriasDisponibles] = useState([]);
+  const [categoriasActivas, setCategoriasActivas] = useState([]);
+
   // Estados del juego
   const [cartaActual, setCartaActual] = useState(null);
   const [turnoIdx, setTurnoIdx] = useState(0);
@@ -25,6 +37,32 @@ export default function SalaClient({ cartas, titulo, modo }) {
   // Referencia de la fase actual para que el Host sepa si bloquear entradas
   const faseRef = useRef(fase);
   useEffect(() => { faseRef.current = fase; }, [fase]);
+
+  const cargarJuego = async (modo) => {
+    setModoSeleccionado(modo);
+    setIsLoadingCards(true);
+    try {
+      const res = await fetch(`/api/cartas?modo=${modo}`);
+      const data = await res.json();
+      setCartasData(data);
+      const unicas = [...new Set(data.map(c => c.categoria).filter(Boolean))];
+      setCategoriasDisponibles(unicas);
+      setCategoriasActivas(unicas);
+      
+      const titles = { osc: 'La Última Carta', toxic: 'Toxic Cards', poker: 'Poker Caliente' };
+      const nTitulo = titles[modo] || 'As Bajo La Manga';
+      setTituloJuego(nTitulo);
+
+      // Avisar a todos los jugadores del cambio
+      connListRef.current.forEach(c => {
+        if (c.open) c.send({ tipo: 'cambio_modo', modo, titulo: nTitulo });
+      });
+    } catch (e) {
+      console.error(e);
+      setError('Error al cargar las cartas de este juego.');
+    }
+    setIsLoadingCards(false);
+  };
 
   // -----------------------------------------------------
   // 1. INICIAR CONEXIÓN (Crear o Unirse)
@@ -42,8 +80,13 @@ export default function SalaClient({ cartas, titulo, modo }) {
     setEsHost(crear);
     setFase('lobby');
 
+    if (crear) {
+      // Cargar las cartas del modo inicial al crear
+      cargarJuego(modoInicial);
+    }
+
     const { Peer } = await import('peerjs');
-    const peerId = crear ? `ablm-host-${codigoFinal}-${modo}` : `ablm-${codigoFinal}-${Date.now()}`;
+    const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
     const newPeer = new Peer(peerId, { debug: 0 });
 
     newPeer.on('open', () => {
@@ -55,6 +98,8 @@ export default function SalaClient({ cartas, titulo, modo }) {
         newPeer.on('connection', (conn) => {
           conn.on('open', () => {
             connListRef.current = [...connListRef.current, conn];
+            // Enviar el estado actual de la sala
+            conn.send({ tipo: 'estado_sala', modo: modoSeleccionado, titulo: tituloJuego });
             conn.on('data', (data) => manejarMensajeHost(conn, data));
           });
           
@@ -72,7 +117,7 @@ export default function SalaClient({ cartas, titulo, modo }) {
         });
       } else {
         // JUGADOR: Se conecta al host
-        const conn = newPeer.connect(`ablm-host-${codigoFinal}-${modo}`);
+        const conn = newPeer.connect(`ablm-host-${codigoFinal}`);
         conn.on('open', () => {
           hostConnRef.current = conn;
           conn.send({ tipo: 'unirse', apodo });
@@ -123,14 +168,14 @@ export default function SalaClient({ cartas, titulo, modo }) {
   const jugadoresRef = useRef([]);
   useEffect(() => { jugadoresRef.current = jugadores; }, [jugadores]);
 
-  // Categorías
-  const categoriasDisponibles = [...new Set(cartas.map(c => c.categoria).filter(Boolean))];
-  const [categoriasActivas, setCategoriasActivas] = useState(categoriasDisponibles);
-
   const iniciarJuego = () => {
     if (jugadores.length < 1) return;
+    if (cartasData.length === 0) {
+      alert("Las cartas aún están cargando...");
+      return;
+    }
     
-    const filtradas = cartas.filter(c => !c.categoria || categoriasActivas.includes(c.categoria));
+    const filtradas = cartasData.filter(c => !c.categoria || categoriasActivas.includes(c.categoria));
     if (filtradas.length === 0) {
       alert("¡Tenés que seleccionar al menos una categoría!");
       return;
@@ -190,6 +235,10 @@ export default function SalaClient({ cartas, titulo, modo }) {
     if (data.tipo === 'rechazado') {
       setError(data.mensaje);
       salirDeSala();
+    }
+    if (data.tipo === 'estado_sala' || data.tipo === 'cambio_modo') {
+      setModoSeleccionado(data.modo);
+      setTituloJuego(data.titulo);
     }
     if (data.tipo === 'lista_jugadores') setJugadores(data.jugadores);
     if (data.tipo === 'inicio_juego') {
@@ -294,8 +343,9 @@ export default function SalaClient({ cartas, titulo, modo }) {
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-yellow-600/10 rounded-full blur-[100px]"></div>
         </div>
         <div className="max-w-sm w-full z-10 animate-fade-in text-center">
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-2">Código de Sala</p>
-          <h1 className="text-6xl font-black gradient-gold tracking-widest mb-8">{codigoSala}</h1>
+          <p className="text-yellow-500 text-sm font-black uppercase tracking-widest mb-1">{tituloJuego}</p>
+          <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mb-2">Código de Sala</p>
+          <h1 className="text-6xl font-black gradient-gold tracking-widest mb-6">{codigoSala}</h1>
 
           <div className="glass rounded-2xl p-4 mb-6">
             <h3 className="text-left text-xs font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800 pb-3 mb-3">
@@ -311,6 +361,17 @@ export default function SalaClient({ cartas, titulo, modo }) {
             </div>
             {!esHost && <p className="text-xs text-slate-500 mt-4 animate-pulse">Esperando que el host inicie...</p>}
           </div>
+
+          {esHost && (
+            <div className="glass p-4 rounded-3xl mb-4 border-yellow-600/10">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 text-center">Seleccionar Juego</h3>
+              <div className="flex gap-2 justify-center">
+                <button onClick={() => cargarJuego('osc')} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${modoSeleccionado === 'osc' ? 'bg-gold text-slate-900' : 'bg-[#020617] text-slate-500 border border-slate-800'}`}>La Última Carta</button>
+                <button onClick={() => cargarJuego('toxic')} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${modoSeleccionado === 'toxic' ? 'bg-gold text-slate-900' : 'bg-[#020617] text-slate-500 border border-slate-800'}`}>Toxic Cards</button>
+                <button onClick={() => cargarJuego('poker')} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${modoSeleccionado === 'poker' ? 'bg-gold text-slate-900' : 'bg-[#020617] text-slate-500 border border-slate-800'}`}>Poker Caliente</button>
+              </div>
+            </div>
+          )}
 
           {esHost && categoriasDisponibles.length > 0 && (
             <div className="glass p-4 rounded-3xl mb-6 border-yellow-600/10">
