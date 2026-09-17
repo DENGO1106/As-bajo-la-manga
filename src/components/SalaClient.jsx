@@ -117,41 +117,37 @@ export default function SalaClient({ cartas, titulo, modo }) {
   // -----------------------------------------------------
   // 3. LÓGICA DE JUEGO (Solo el Host la ejecuta)
   // -----------------------------------------------------
-  const iniciarJuego = () => {
-    if (jugadores.length < 1) return;
-    barajaRef.current = [...cartas].sort(() => Math.random() - 0.5);
-    indexRef.current = 0;
-    
-    // Avisar a todos
-    connListRef.current.forEach(c => c.send({ tipo: 'inicio_juego' }));
-    setFase('jugando');
-  };
-
   // Usamos referencias para evitar problemas con callbacks
   const turnoRef = useRef(0);
   useEffect(() => { turnoRef.current = turnoIdx; }, [turnoIdx]);
   const jugadoresRef = useRef([]);
   useEffect(() => { jugadoresRef.current = jugadores; }, [jugadores]);
 
-  const tirarCarta = useCallback(() => {
-    // La logica ahora usa barajaRef
-    const carta = barajaRef.current[indexRef.current % barajaRef.current.length];
-    indexRef.current += 1;
+  const iniciarJuego = () => {
+    if (jugadores.length < 1) return;
+    barajaRef.current = [...cartas].sort(() => Math.random() - 0.5);
+    indexRef.current = 1; // Ya sacamos la primera
     
-    setCartaActual(carta);
-    setAnimKey(k => k + 1);
-    
-    // Avisar a todos
-    connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta, turnoIdx: turnoRef.current }));
-  }, []);
+    const cartaInicial = barajaRef.current[0];
+    setCartaActual(cartaInicial);
+    setTurnoIdx(0);
+    setFase('jugando');
+
+    // Avisar a todos y enviar primera carta
+    connListRef.current.forEach(c => c.send({ tipo: 'inicio_juego', carta: cartaInicial, turnoIdx: 0 }));
+  };
 
   const siguienteTurno = useCallback(() => {
     const nuevoTurno = (turnoRef.current + 1) % jugadoresRef.current.length;
-    setTurnoIdx(nuevoTurno);
-    setCartaActual(null);
+    const carta = barajaRef.current[indexRef.current % barajaRef.current.length];
+    indexRef.current += 1;
     
-    // Avisar a todos
-    connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta: null, turnoIdx: nuevoTurno }));
+    setTurnoIdx(nuevoTurno);
+    setCartaActual(carta);
+    setAnimKey(k => k + 1);
+    
+    // Avisar a todos de la nueva carta y turno
+    connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta, turnoIdx: nuevoTurno }));
   }, []);
 
   const reiniciarLobby = useCallback(() => {
@@ -164,7 +160,7 @@ export default function SalaClient({ cartas, titulo, modo }) {
     if (data.tipo === 'unirse') {
       if (faseRef.current === 'jugando') {
         conn.send({ tipo: 'rechazado', mensaje: 'La partida ya comenzó. Esperá a que vuelvan a la sala.' });
-        setTimeout(() => conn.close(), 500); // Darle tiempo para enviar el mensaje
+        setTimeout(() => conn.close(), 500);
         return;
       }
 
@@ -176,9 +172,8 @@ export default function SalaClient({ cartas, titulo, modo }) {
         return nuevos;
       });
     }
-    if (data.tipo === 'accion_tirar') tirarCarta();
     if (data.tipo === 'accion_siguiente') siguienteTurno();
-  }, [tirarCarta, siguienteTurno]);
+  }, [siguienteTurno]);
 
   const manejarMensajeJugador = useCallback((data) => {
     if (data.tipo === 'rechazado') {
@@ -186,7 +181,11 @@ export default function SalaClient({ cartas, titulo, modo }) {
       salirDeSala();
     }
     if (data.tipo === 'lista_jugadores') setJugadores(data.jugadores);
-    if (data.tipo === 'inicio_juego') setFase('jugando');
+    if (data.tipo === 'inicio_juego') {
+      setFase('jugando');
+      setCartaActual(data.carta);
+      setTurnoIdx(data.turnoIdx);
+    }
     if (data.tipo === 'volver_lobby') {
       setFase('lobby');
       setCartaActual(null);
@@ -339,43 +338,27 @@ export default function SalaClient({ cartas, titulo, modo }) {
         className="card-enter card-shadow z-10 w-[min(300px,85vw)] rounded-3xl p-8 text-center border border-yellow-600/10 relative overflow-hidden"
         style={{ backgroundColor: cartaActual?.colorHex || 'rgba(15,23,42,0.8)', minHeight: '380px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
       >
-        {cartaActual ? (
+        {cartaActual && (
           <>
             {cartaActual.categoria && <p className="text-white/40 text-xs uppercase tracking-widest font-black mb-5">{cartaActual.categoria}</p>}
             <h3 className="text-white font-black text-2xl uppercase tracking-wide leading-tight mb-6">{cartaActual.nombre}</h3>
             <p className={`text-white/85 leading-relaxed ${cartaActual.textSize || 'text-base'}`}>{cartaActual.descripcion}</p>
             {cartaActual.tragos && <p className="mt-6 text-white/50 text-sm font-bold border-t border-white/10 pt-4 w-full text-center">🍷 {cartaActual.tragos}</p>}
           </>
-        ) : (
-          <div className="flex flex-col items-center gap-4 text-slate-700">
-            <span className="text-7xl">🃏</span>
-            <p className="text-sm font-semibold">Esperando carta...</p>
-          </div>
         )}
       </div>
 
       <div className="flex flex-col gap-3 w-full max-w-[300px] z-10">
-        {!cartaActual ? (
-          (esHost || esMiTurno) ? (
-            <button onClick={() => esHost ? tirarCarta() : hostConnRef.current?.send({ tipo: 'accion_tirar' })} className="w-full bg-gold text-slate-900 font-black text-lg py-4 rounded-2xl shadow-lg shadow-yellow-900/30 active:scale-95 transition-all">
-              🎲 {esMiTurno ? 'Tirar Carta' : 'Forzar Carta'}
-            </button>
-          ) : (
-            <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
-              Esperando a {jugadorActual}...
-            </div>
-          )
+        {(esHost || esMiTurno) ? (
+          <button onClick={() => esHost ? siguienteTurno() : hostConnRef.current?.send({ tipo: 'accion_siguiente' })} className="w-full glass text-white font-black text-base py-4 rounded-2xl active:scale-95 transition-all">
+            {esMiTurno ? 'Siguiente Turno →' : 'Forzar Siguiente →'}
+          </button>
         ) : (
-          (esHost || esMiTurno) ? (
-            <button onClick={() => esHost ? siguienteTurno() : hostConnRef.current?.send({ tipo: 'accion_siguiente' })} className="w-full glass text-white font-black text-base py-4 rounded-2xl active:scale-95 transition-all">
-              {esMiTurno ? 'Siguiente turno →' : 'Forzar Siguiente →'}
-            </button>
-          ) : (
-            <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
-              Turno de {jugadorActual}
-            </div>
-          )
+          <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
+            Esperando a {jugadorActual}...
+          </div>
         )}
+        
         
         {/* Botón para volver al lobby (solo Host) */}
         {esHost && (
