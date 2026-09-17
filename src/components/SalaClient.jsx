@@ -70,9 +70,13 @@ export default function SalaClient() {
   const conectar = async (crear) => {
     if (!apodo.trim()) return;
     setError('');
-    const codigoFinal = crear ? Math.random().toString(36).substring(2, 6).toUpperCase() : codigoSala.toUpperCase();
+    
+    // Limpiar el código de espacios que meten los teclados de celular
+    const codigoLimpio = codigoSala.trim().toUpperCase();
+    const codigoFinal = crear ? Math.random().toString(36).substring(2, 6).toUpperCase() : codigoLimpio;
+    
     if (!crear && codigoFinal.length !== 4) {
-      setError('El código debe tener 4 letras');
+      setError('El código debe tener exactamente 4 letras o números');
       return;
     }
 
