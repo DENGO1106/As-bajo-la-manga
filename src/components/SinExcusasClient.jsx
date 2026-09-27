@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 const PALOS = ['♣', '♦', '♥', '♠'];
 const COLORES = { '♣': 'negro', '♦': 'rojo', '♥': 'rojo', '♠': 'negro' };
@@ -48,6 +49,7 @@ function Setup({ onIniciar }) {
   return (
     <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4">
       <div className="max-w-sm w-full space-y-6">
+        <Link href="/" className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-400 text-sm transition-colors">← Volver</Link>
         <div className="text-center">
           <h1 className="text-4xl font-black gradient-gold mb-2">La Última Carta</h1>
           <p className="text-slate-400 text-sm">Modo Local (Pasa el celular)</p>

@@ -3,8 +3,8 @@
 const modos = [
   { id: 'osc',      nombre: 'Sin Excusas',      desc: '151 cartas - Verdad o reto',      emoji: '🃏' },
   { id: 'toxic',    nombre: 'Toxic Cards',       desc: '300 cartas - Verdad o reto',      emoji: '☠️' },
-  { id: 'poker',    nombre: 'Poker Caliente',    desc: '54 cartas - Mazo completo',       emoji: '♠️' },
-  { id: 'escalera', nombre: 'La Ultima Carta',   desc: '48 cartas - Escalera de riesgo',  emoji: '🎲' },
+  { id: 'poker',    nombre: 'Poker Caliente',    desc: '54 cartas - Mazo completo',       emoji: '🎰' },
+  { id: 'escalera', nombre: 'La Última Carta',   desc: '48 cartas - Escalera de riesgo',  emoji: '🎲' },
 ];
 
 export default function Home() {
@@ -20,16 +20,18 @@ export default function Home() {
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-yellow-600/10 rounded-full blur-[120px]"></div>
         <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[400px] h-[300px] bg-yellow-800/10 rounded-full blur-[100px]"></div>
       </div>
+
       <div className="max-w-md w-full z-10 animate-fade-in">
         <div className="text-center mb-10 mt-6">
           <div className="inline-flex items-center gap-2 bg-yellow-900/20 border border-yellow-600/20 text-yellow-400/80 text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-full mb-6">
-            🃏 Juego de Cartas
+            🂠 Juego de Cartas
           </div>
           <h1 className="text-6xl md:text-7xl font-black gradient-gold leading-tight mb-3">
             As Bajo<br/>La Manga
           </h1>
           <p className="text-slate-500 text-sm">Elige un juego y un modo para empezar</p>
         </div>
+
         <div className="flex flex-col gap-3">
           {modos.map(modo => (
             <div key={modo.id} className="glass rounded-2xl overflow-hidden shadow-lg border border-slate-800/60">
@@ -45,11 +47,11 @@ export default function Home() {
                   href={`/jugar/${modo.id}/individual`}
                   className="flex flex-col items-center gap-1 py-4 text-sm font-bold text-slate-400 hover:text-yellow-400 hover:bg-yellow-900/10 active:bg-yellow-900/20 transition-all"
                 >
-                  <span className="text-xl">👤</span>
+                  <span className="text-xl">📱</span>
                   <span>Individual</span>
                 </Link>
                 <Link
-                  href={`/sala?modo=${modo.id}`}
+                  href={modo.id === 'escalera' ? `/jugar/escalera/sala` : `/sala?modo=${modo.id}`}
                   className="flex flex-col items-center gap-1 py-4 text-sm font-bold text-slate-400 hover:text-yellow-400 hover:bg-yellow-900/10 active:bg-yellow-900/20 transition-all"
                 >
                   <span className="text-xl">🌐</span>
