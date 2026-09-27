@@ -1,13 +1,12 @@
-export const runtime = 'edge';
+﻿export const runtime = 'edge';
 import { Client } from '@notionhq/client';
 
 export async function POST(req) {
   try {
     const { password, juego, nombre, descripcion, tragos, categoria } = await req.json();
 
-    // Verificación de seguridad
     if (password !== '!DDeng@01106!') {
-      return new Response(JSON.stringify({ error: 'Contraseña incorrecta' }), { status: 401 });
+      return new Response(JSON.stringify({ error: 'Contrasena incorrecta' }), { status: 401 });
     }
 
     const notion = new Client({ auth: process.env.NOTION_TOKEN || process.env.NOTION_SECRET });
@@ -20,19 +19,13 @@ export async function POST(req) {
       return new Response(JSON.stringify({ error: 'Base de datos no configurada para este juego' }), { status: 400 });
     }
 
-    // Preparar propiedades para Notion
     const properties = {
       Name: { title: [{ text: { content: nombre } }] },
       Descripcion: { rich_text: [{ text: { content: descripcion } }] },
     };
 
-    if (tragos) {
-      properties.Tragos = { number: Number(tragos) };
-    }
-    
-    if (categoria) {
-      properties.Categoria = { select: { name: categoria } };
-    }
+    if (tragos) properties.Tragos = { number: Number(tragos) };
+    if (categoria) properties.Categoria = { select: { name: categoria } };
 
     await notion.pages.create({
       parent: { database_id: dbId },
