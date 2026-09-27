@@ -4,5 +4,5 @@ export const runtime = 'edge';
 
 export default async function CartasOSC() {
   const cartas = await getCartas(process.env.NOTION_OSC_DB);
-  return <CartasClient cartas={cartas} titulo="La Última Carta 🃏" color="red" volver="/" />;
+  return <CartasClient cartas={cartas} titulo="Sin Excusas ??" color="red" volver="/" />;
 }
