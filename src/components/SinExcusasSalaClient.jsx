@@ -1,13 +1,23 @@
-﻿'use client';
+'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-// Baraja logic
 const PALOS = ['♣', '♦', '♥', '♠'];
 const COLORES = { '♣': 'negro', '♦': 'rojo', '♥': 'rojo', '♠': 'negro' };
 const FIGURAS = { J: 11, Q: 12, K: 13 };
 const PUNTOS_CARTA = [0, 1, 2, 3, 4];
+
+const EVENTOS_SORPRESA = [
+  "Cascada: Empieza a tomar el jugador activo y nadie puede parar hasta que el de su derecha pare.",
+  "Regla del Pulgar: El host pone el pulgar en la mesa, el último en hacerlo toma 2 tragos.",
+  "Misterio: Todos los hombres toman 1 trago.",
+  "Chicas al poder: Todas las mujeres toman 1 trago.",
+  "El jugador activo asigna 3 tragos a quien quiera.",
+  "Cultura Chupística: Marcas de cerveza. El que pierda o repita, toma.",
+  "El piso es lava: El último en levantar los pies toma 2 tragos.",
+  "Salud global: Todos los jugadores chocan copas y toman 1 trago."
+];
 
 function generarBaraja() {
   const cartas = [];
@@ -29,7 +39,7 @@ export default function SinExcusasSalaClient() {
   const router = useRouter();
   
   // -- LOBBY STATE --
-  const [faseGlobal, setFaseGlobal] = useState('menu'); // menu | lobby | jugando | fin
+  const [faseGlobal, setFaseGlobal] = useState('menu');
   const [apodo, setApodo] = useState('');
   const [codigoSala, setCodigoSala] = useState('');
   const [esHost, setEsHost] = useState(false);
@@ -48,6 +58,7 @@ export default function SinExcusasSalaClient() {
   const [enRevancha, setEnRevancha] = useState(false);
   const [puntosGanadosEscalera, setPuntosGanadosEscalera] = useState(0);
   const [cobarde, setCobarde] = useState(false);
+  const [eventoSorpresa, setEventoSorpresa] = useState(null);
   const [log, setLog] = useState([]);
 
   // -- WEBRTC STATE --
@@ -55,14 +66,13 @@ export default function SinExcusasSalaClient() {
   const connListRef = useRef([]);
   const hostConnRef = useRef(null);
   
-  // -- HOST GAME REFS (Source of truth) --
+  // -- HOST GAME REFS --
   const gameStateRef = useRef({
     faseGlobal: 'menu', jugadores: [], turnoIdx: 0, escalera: [], cartaActual: null,
     etapa: 0, tragos: 0, esperandoRespuesta: false, resultado: null, enRevancha: false,
-    puntosGanadosEscalera: 0, cobarde: false, log: [], baraja: [], indexBaraja: 0
+    puntosGanadosEscalera: 0, cobarde: false, eventoSorpresa: null, log: [], baraja: [], indexBaraja: 0
   });
 
-  // Sync state to refs for host logic
   const miIdRef = useRef('');
 
   // -----------------------------------------------------
@@ -73,7 +83,6 @@ export default function SinExcusasSalaClient() {
     const nextState = { ...gameStateRef.current, ...newStateUpdates };
     gameStateRef.current = nextState;
     
-    // Update local React state
     setFaseGlobal(nextState.faseGlobal);
     setJugadores(nextState.jugadores);
     setTurnoIdx(nextState.turnoIdx);
@@ -86,9 +95,9 @@ export default function SinExcusasSalaClient() {
     setEnRevancha(nextState.enRevancha);
     setPuntosGanadosEscalera(nextState.puntosGanadosEscalera);
     setCobarde(nextState.cobarde);
+    setEventoSorpresa(nextState.eventoSorpresa);
     setLog(nextState.log);
 
-    // Filter out baraja before sending to peers
     const { baraja, indexBaraja, ...publicState } = nextState;
     connListRef.current.forEach(c => {
       if (c.open) c.send({ tipo: 'sync_state', state: publicState });
@@ -127,7 +136,6 @@ export default function SinExcusasSalaClient() {
     newPeer.on('open', () => {
       setPeer(newPeer);
       if (crear) {
-        // HOST INIT
         setFaseGlobal('lobby');
         const initJug = [{ id: peerId, apodo, esHost: true, puntos: -1, turnosJugados: 0 }];
         broadcastState({ faseGlobal: 'lobby', jugadores: initJug, baraja: generarBaraja(), indexBaraja: 0 });
@@ -147,7 +155,6 @@ export default function SinExcusasSalaClient() {
           });
         });
       } else {
-        // JUGADOR INIT
         const conn = newPeer.connect(`ablm-host-${codigoFinal}`, { reliable: true });
         conn.on('open', () => {
           hostConnRef.current = conn;
@@ -168,9 +175,6 @@ export default function SinExcusasSalaClient() {
     setFaseGlobal('menu');
   };
 
-  // -----------------------------------------------------
-  // MENSAJES JUGADOR -> HOST (Acciones)
-  // -----------------------------------------------------
   const manejarMensajeHost = useCallback((conn, data) => {
     if (data.tipo === 'unirse') {
       const state = gameStateRef.current;
@@ -188,16 +192,10 @@ export default function SinExcusasSalaClient() {
   }, []);
 
   const enviarAccion = (accion, payload = null) => {
-    if (esHost) {
-      procesarAccionHost(accion, payload, miIdRef.current);
-    } else {
-      hostConnRef.current?.send({ tipo: 'accion', accion, payload });
-    }
+    if (esHost) procesarAccionHost(accion, payload, miIdRef.current);
+    else hostConnRef.current?.send({ tipo: 'accion', accion, payload });
   };
 
-  // -----------------------------------------------------
-  // MENSAJES HOST -> JUGADOR (Sincronización)
-  // -----------------------------------------------------
   const manejarMensajeJugador = useCallback((data) => {
     if (data.tipo === 'sync_state') {
       const s = data.state;
@@ -205,25 +203,22 @@ export default function SinExcusasSalaClient() {
       setEscalera(s.escalera); setCartaActual(s.cartaActual); setEtapa(s.etapa);
       setTragos(s.tragos); setEsperandoRespuesta(s.esperandoRespuesta); setResultado(s.resultado);
       setEnRevancha(s.enRevancha); setPuntosGanadosEscalera(s.puntosGanadosEscalera);
-      setCobarde(s.cobarde); setLog(s.log);
+      setCobarde(s.cobarde); setEventoSorpresa(s.eventoSorpresa); setLog(s.log);
     }
     if (data.tipo === 'rechazado') {
       setError(data.mensaje); salirDeSala();
     }
   }, []);
 
-  // -----------------------------------------------------
-  // MOTOR DEL JUEGO (Se ejecuta SÓLO en el Host)
-  // -----------------------------------------------------
   const procesarAccionHost = (accion, payload, peerId) => {
     const s = gameStateRef.current;
-    
-    // Verificación de seguridad: Solo el jugador activo o el host pueden accionar
     const jugadorActivo = s.jugadores[s.turnoIdx];
     if (!jugadorActivo) return;
-    if (peerId !== jugadorActivo.id && peerId !== miIdRef.current) return;
+    
+    // El Host tiene poderes para accionar algunas cosas aunque no sea su turno
+    const esElHost = peerId === miIdRef.current;
+    if (peerId !== jugadorActivo.id && !esElHost) return;
 
-    // Helpers
     const sacarCartaHost = () => {
       let b = s.baraja;
       let i = s.indexBaraja;
@@ -236,14 +231,37 @@ export default function SinExcusasSalaClient() {
     const addLog = (msg) => { s.log = [...s.log.slice(-9), msg]; };
 
     if (accion === 'iniciarJuego') {
-      if (s.jugadores.length < 1) return; // Permitir 1 para pruebas
+      if (s.jugadores.length < 1) return;
       s.jugadores = s.jugadores.map(j => ({ ...j, puntos: -1, turnosJugados: 0 }));
-      broadcastState({ faseGlobal: 'jugando', baraja: generarBaraja(), indexBaraja: 0, turnoIdx: 0, etapa: 0, log: [] });
+      broadcastState({ faseGlobal: 'jugando', baraja: generarBaraja(), indexBaraja: 0, turnoIdx: 0, etapa: 0, log: [], eventoSorpresa: null });
     }
     
     if (accion === 'tirarCarta') {
       const carta = sacarCartaHost();
       broadcastState({ cartaActual: carta, escalera: [carta], etapa: 1, esperandoRespuesta: true, resultado: null, tragos: 0, puntosGanadosEscalera: 0, enRevancha: false, cobarde: false });
+    }
+
+    if (accion === 'lanzarEventoManual' && esElHost) {
+      const evento = EVENTOS_SORPRESA[Math.floor(Math.random() * EVENTOS_SORPRESA.length)];
+      broadcastState({ eventoSorpresa: evento });
+    }
+
+    if (accion === 'continuarEvento' && esElHost) {
+      // El Host cerró el evento, simplemente se oculta y el turno sigue exactamente donde estaba
+      broadcastState({ eventoSorpresa: null });
+    }
+
+    if (accion === 'banearCarta' && esElHost) {
+      // Saca carta nueva sin avanzar turno y la reemplaza
+      const carta = sacarCartaHost();
+      const nuevaEscalera = [...s.escalera];
+      if (nuevaEscalera.length > 0) {
+        nuevaEscalera[nuevaEscalera.length - 1] = carta;
+      } else {
+        nuevaEscalera.push(carta);
+      }
+      addLog(`🚫 Host baneó la carta. Nueva carta sacada.`);
+      broadcastState({ cartaActual: carta, escalera: nuevaEscalera, esperandoRespuesta: true, resultado: null });
     }
 
     if (accion === 'declararCobarde') {
@@ -268,7 +286,7 @@ export default function SinExcusasSalaClient() {
       let sig = (s.turnoIdx + 1) % nj.length;
       while (nj[sig].turnosJugados >= 3) sig = (sig + 1) % nj.length;
       
-      broadcastState({ jugadores: nj, turnoIdx: sig, etapa: 0, escalera: [], cartaActual: null, tragos: 0, puntosGanadosEscalera: 0, resultado: null, esperandoRespuesta: false, cobarde: false });
+      broadcastState({ jugadores: nj, turnoIdx: sig, etapa: 0, escalera: [], cartaActual: null, tragos: 0, puntosGanadosEscalera: 0, resultado: null, esperandoRespuesta: false, cobarde: false, eventoSorpresa: null });
     }
 
     if (accion === 'responder') {
@@ -319,21 +337,15 @@ export default function SinExcusasSalaClient() {
     }
   };
 
-  // -----------------------------------------------------
-  // RENDER HELPERS
-  // -----------------------------------------------------
-  const BtnRespuesta = ({ onClick, label, emoji, color }) => (
-    <button onClick={onClick} className={`w-full py-4 rounded-2xl font-black border text-lg hover:scale-[1.02] active:scale-95 border-slate-600/40 bg-slate-900/50 text-slate-200`}>
+  const BtnRespuesta = ({ onClick, label, emoji }) => (
+    <button onClick={onClick} className="w-full py-4 rounded-2xl font-black border text-lg hover:scale-[1.02] active:scale-95 border-slate-600/40 bg-slate-900/50 text-slate-200 shadow-lg">
       {emoji} {label}
     </button>
   );
 
-  const miTurno = jugadores[turnoIdx]?.id === peer?.id || esHost; // Host siempre puede clickear (por si alguien no puede)
+  const miTurno = jugadores[turnoIdx]?.id === peer?.id || esHost;
   const jugadorActivo = jugadores[turnoIdx] || {};
 
-  // ==========================================
-  // PANTALLA 1: MENU
-  // ==========================================
   if (faseGlobal === 'menu') {
     return (
       <main className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4">
@@ -341,10 +353,10 @@ export default function SinExcusasSalaClient() {
           <h2 className="text-4xl font-black gradient-gold mb-1">La Última Carta</h2>
           <p className="text-slate-500 text-sm mb-6">Modo en Sala · Sincronizado</p>
           {error && <p className="text-red-400 mb-4 font-bold">{error}</p>}
-          <input type="text" maxLength={15} placeholder="Tu apodo" value={apodo} onChange={e => setApodo(e.target.value)} className="w-full bg-[#020617] border border-slate-800 text-white px-4 py-3 rounded-2xl mb-4 text-center font-bold" />
+          <input type="text" maxLength={15} placeholder="Tu apodo" value={apodo} onChange={e => setApodo(e.target.value)} className="w-full bg-[#0f172a] border border-slate-800 text-white px-4 py-3 rounded-2xl mb-4 text-center font-bold" />
           <button onClick={() => conectar(true)} disabled={!apodo.trim()} className="w-full bg-gold text-slate-900 font-black py-3.5 rounded-2xl mb-4">👑 Crear Sala</button>
           <div className="flex gap-2">
-            <input type="text" maxLength={4} placeholder="CÓDIGO" value={codigoSala} onChange={e => setCodigoSala(e.target.value.toUpperCase())} className="w-1/2 bg-[#020617] border border-slate-800 text-white text-center font-black px-4 py-3 rounded-xl" />
+            <input type="text" maxLength={4} placeholder="CÓDIGO" value={codigoSala} onChange={e => setCodigoSala(e.target.value.toUpperCase())} className="w-1/2 bg-[#0f172a] border border-slate-800 text-white text-center font-black px-4 py-3 rounded-xl" />
             <button onClick={() => conectar(false)} disabled={!apodo.trim() || codigoSala.length !== 4 || isConnecting} className="w-1/2 bg-yellow-900/20 text-yellow-400 font-black py-3 rounded-xl">Unirse</button>
           </div>
           <Link href="/" className="block mt-6 text-slate-500 text-sm">Volver al inicio</Link>
@@ -353,20 +365,17 @@ export default function SinExcusasSalaClient() {
     );
   }
 
-  // ==========================================
-  // PANTALLA 2: LOBBY
-  // ==========================================
   if (faseGlobal === 'lobby') {
     return (
       <main className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4">
         <div className="max-w-sm w-full z-10 animate-fade-in text-center">
           <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-1">Código de Sala</p>
           <h1 className="text-6xl font-black gradient-gold tracking-widest mb-6">{codigoSala}</h1>
-          <div className="glass rounded-2xl p-4 mb-6 text-left">
+          <div className="glass rounded-2xl p-4 mb-6 text-left border border-slate-800">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Jugadores ({jugadores.length})</h3>
             {jugadores.map(j => <div key={j.id} className="text-white font-bold py-1">{j.apodo} {j.esHost && '👑'}</div>)}
           </div>
-          {esHost && <button onClick={() => enviarAccion('iniciarJuego')} className="w-full bg-gold text-slate-900 font-black py-4 rounded-2xl mb-4">Iniciar Torneo 🎲</button>}
+          {esHost && <button onClick={() => enviarAccion('iniciarJuego')} className="w-full bg-gold text-slate-900 font-black py-4 rounded-2xl mb-4 shadow-lg shadow-yellow-900/30">Iniciar Torneo 🎲</button>}
           {!esHost && <p className="text-slate-500 text-sm mb-4">Esperando al Host...</p>}
           <button onClick={salirDeSala} className="text-red-500 text-sm font-bold">Salir de la sala</button>
         </div>
@@ -374,9 +383,6 @@ export default function SinExcusasSalaClient() {
     );
   }
 
-  // ==========================================
-  // PANTALLA 3: JUGANDO / FIN
-  // ==========================================
   if (faseGlobal === 'fin') {
     const sorted = [...jugadores].sort((a, b) => b.puntos - a.puntos);
     return (
@@ -384,7 +390,7 @@ export default function SinExcusasSalaClient() {
         <h1 className="text-3xl font-black gradient-gold mb-6">Fin del Torneo 🏆</h1>
         <div className="max-w-sm w-full space-y-3 mb-6">
           {sorted.map((j, i) => (
-            <div key={j.id} className="glass p-4 rounded-xl flex justify-between">
+            <div key={j.id} className="glass p-4 rounded-xl flex justify-between border border-slate-800">
               <span className="font-bold text-white">{i === 0 ? '🥇' : i === sorted.length - 1 ? '💀' : `#${i + 1}`} {j.apodo}</span>
               <span className="font-black text-yellow-400">{j.puntos} pts</span>
             </div>
@@ -398,14 +404,33 @@ export default function SinExcusasSalaClient() {
   const eReal = enRevancha ? Math.abs(etapa) : etapa;
   
   return (
-    <div className="min-h-screen bg-[#020617] p-4 flex flex-col items-center pt-6 pb-24">
-      <div className="max-w-sm w-full space-y-4">
+    <div className="min-h-screen bg-[#020617] p-4 flex flex-col items-center pt-6 pb-24 relative">
+      
+      {/* OVERLAY DE EVENTO SORPRESA */}
+      {eventoSorpresa && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-red-950/90 backdrop-blur-md p-6 text-center animate-fade-in">
+          <div className="w-full max-w-sm glass border-red-500/50 p-8 rounded-3xl shadow-2xl shadow-red-900/50">
+            <h2 className="text-3xl font-black text-red-500 mb-2 animate-pulse">¡ALERTA GLOBAL!</h2>
+            <p className="text-white text-lg font-bold mb-8 leading-snug">{eventoSorpresa}</p>
+            <p className="text-red-300 text-xs uppercase tracking-widest mb-6">Cumplan el castigo antes de seguir</p>
+            
+            {esHost ? (
+              <button onClick={() => enviarAccion('continuarEvento')} className="w-full py-4 rounded-2xl font-black text-lg bg-red-600 text-white shadow-lg active:scale-95 transition-all">
+                Continuar con el turno ✓
+              </button>
+            ) : (
+              <p className="text-red-400 text-sm font-bold animate-pulse">Esperando que el Host continúe...</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-sm w-full space-y-4 z-10">
         <div className="flex justify-between items-center text-xs font-bold text-slate-400">
           <span>Sala: {codigoSala}</span>
           <button onClick={salirDeSala} className="hover:text-red-400">Salir</button>
         </div>
 
-        {/* Turno actual */}
         <div className="text-center">
           <p className="text-slate-500 text-xs uppercase tracking-widest">Le toca a</p>
           <h2 className="text-3xl font-black text-yellow-400">{jugadorActivo.apodo}</h2>
@@ -417,9 +442,9 @@ export default function SinExcusasSalaClient() {
           <div className="flex gap-2 justify-center flex-wrap">
             {escalera.map((c, i) => {
               const estaOculta = (i === escalera.length - 1) && esperandoRespuesta && !resultado;
-              if (estaOculta) return <div key={i} className="w-14 h-20 rounded-xl border border-yellow-600/50 bg-yellow-900/80 flex items-center justify-center"><span className="text-2xl opacity-50">🃏</span></div>;
+              if (estaOculta) return <div key={i} className="w-14 h-20 rounded-xl border border-yellow-600/50 bg-gradient-to-br from-yellow-900/80 to-slate-900 flex items-center justify-center"><span className="text-2xl opacity-50">🃏</span></div>;
               return (
-                <div key={i} className={`w-14 h-20 rounded-xl border flex flex-col items-center justify-center font-black text-lg ${c.color === 'rojo' ? 'text-red-400 border-red-500/50 bg-red-950/40' : 'text-slate-200 border-slate-600/50 bg-slate-900'}`}>
+                <div key={i} className={`w-14 h-20 rounded-xl border flex flex-col items-center justify-center font-black text-lg shadow-lg ${c.color === 'rojo' ? 'text-red-400 border-red-500/50 bg-red-950/40' : 'text-slate-200 border-slate-600/50 bg-slate-900'}`}>
                   <span className="text-sm">{c.rango}</span><span>{c.palo}</span>
                 </div>
               );
@@ -429,7 +454,7 @@ export default function SinExcusasSalaClient() {
 
         {/* Carta Grande */}
         {cartaActual && (
-          <div className={`w-full h-44 rounded-3xl border-2 flex flex-col items-center justify-center shadow-2xl transition-all ${esperandoRespuesta && !resultado ? 'border-yellow-600/50 bg-yellow-900/40' : cartaActual.color === 'rojo' ? 'border-red-500/60 bg-red-950/60' : 'border-slate-600/60 bg-slate-900/80'}`}>
+          <div className={`w-full h-44 rounded-3xl border-2 flex flex-col items-center justify-center shadow-2xl transition-all ${esperandoRespuesta && !resultado ? 'border-yellow-600/50 bg-gradient-to-br from-yellow-900/40 to-slate-900/80' : cartaActual.color === 'rojo' ? 'border-red-500/60 bg-gradient-to-br from-red-950/60 to-red-900/30' : 'border-slate-600/60 bg-gradient-to-br from-slate-900/80 to-slate-800/40'}`}>
             {esperandoRespuesta && !resultado ? (
               <p className="text-6xl opacity-50 animate-pulse">🃏</p>
             ) : resultado ? (
@@ -443,18 +468,32 @@ export default function SinExcusasSalaClient() {
           </div>
         )}
 
+        {/* Botones Especiales para el Host */}
+        {esHost && cartaActual && esperandoRespuesta && !resultado && (
+          <button onClick={() => enviarAccion('banearCarta')} className="w-full py-2 rounded-xl text-xs font-bold border border-red-900/50 text-red-500 hover:bg-red-950/30 transition-all">
+            🚫 Host: Banear esta carta y sacar otra
+          </button>
+        )}
+
+        {esHost && !eventoSorpresa && (
+          <button onClick={() => enviarAccion('lanzarEventoManual')} className="w-full py-2 mb-2 rounded-xl text-xs font-bold border border-purple-900/50 text-purple-400 hover:bg-purple-950/30 transition-all">
+            ⚡ Host: Disparar Evento Sorpresa
+          </button>
+        )}
+
         {/* Acciones */}
-        {!miTurno && <p className="text-center text-slate-500 text-sm py-4">Esperando que {jugadorActivo.apodo} juegue...</p>}
-        {miTurno && (
+        {!miTurno && !eventoSorpresa && <p className="text-center text-slate-500 text-sm py-4 animate-pulse">Esperando que {jugadorActivo.apodo} juegue...</p>}
+        
+        {miTurno && !eventoSorpresa && (
           <div className="space-y-3">
             {etapa === 0 && !resultado && (
               <>
-                <button onClick={() => enviarAccion('tirarCarta')} className="w-full py-5 rounded-2xl font-black text-xl bg-gold text-slate-900">Tirar Carta 🎲</button>
+                <button onClick={() => enviarAccion('tirarCarta')} className="w-full py-5 rounded-2xl font-black text-xl bg-gradient-to-r from-yellow-600 to-yellow-400 text-slate-950 shadow-xl shadow-yellow-900/20 active:scale-95 transition-all">Tirar Carta 🎲</button>
                 <button onClick={() => enviarAccion('declararCobarde')} className="w-full py-3 rounded-2xl font-bold text-slate-500 border border-slate-700">Soy cobarde (1 trago)</button>
               </>
             )}
             
-            {cobarde && resultado?.tipo === 'cobarde' && <button onClick={() => enviarAccion('confirmarCobarde')} className="w-full py-4 rounded-2xl font-black bg-yellow-600 text-slate-900">Confirmar (tomé mi trago)</button>}
+            {cobarde && resultado?.tipo === 'cobarde' && <button onClick={() => enviarAccion('confirmarCobarde')} className="w-full py-4 rounded-2xl font-black bg-yellow-600 text-slate-900 active:scale-95 transition-all">Confirmar (tomé mi trago)</button>}
             
             {esperandoRespuesta && !resultado && (
               <div className="grid grid-cols-2 gap-3">
@@ -467,24 +506,24 @@ export default function SinExcusasSalaClient() {
             
             {resultado?.tipo === 'acierto' && !enRevancha && etapa > 1 && (
               <>
-                {etapa <= 4 && <button onClick={() => enviarAccion('siguienteCarta')} className="w-full py-4 rounded-2xl font-black bg-green-600 text-white">Seguir apostando 🎯</button>}
+                {etapa <= 4 && <button onClick={() => enviarAccion('siguienteCarta')} className="w-full py-4 rounded-2xl font-black bg-gradient-to-r from-green-600 to-emerald-400 text-slate-950 active:scale-95 transition-all">Seguir apostando 🎯</button>}
                 <button onClick={() => enviarAccion('plantarse')} className="w-full py-3 rounded-2xl font-bold border border-slate-600 text-slate-300">Plantarme con {puntosGanadosEscalera} pts</button>
               </>
             )}
 
             {resultado?.tipo === 'acierto' && etapa === 0 && puntosGanadosEscalera > 0 && (
-               <button onClick={() => enviarAccion('siguienteTurno')} className="w-full py-4 rounded-2xl font-black bg-gold text-slate-900">🎉 Escalera completa. Confirmar turno</button>
+               <button onClick={() => enviarAccion('siguienteTurno')} className="w-full py-4 rounded-2xl font-black bg-gradient-to-r from-yellow-600 to-yellow-400 text-slate-950 active:scale-95 transition-all">🎉 Escalera completa. Confirmar turno</button>
             )}
 
             {etapa < 0 && !esperandoRespuesta && !resultado?.tipo?.includes('derrota') && (
               <>
-                {Math.abs(etapa) < 4 && <button onClick={() => enviarAccion('tomarRevancha')} className="w-full py-4 rounded-2xl font-black bg-red-600 text-white">🔄 Tomar Revancha</button>}
+                {Math.abs(etapa) < 4 && <button onClick={() => enviarAccion('tomarRevancha')} className="w-full py-4 rounded-2xl font-black bg-gradient-to-r from-red-600 to-rose-400 text-white active:scale-95 transition-all">🔄 Tomar Revancha</button>}
                 <button onClick={() => enviarAccion('aceptarDerrota')} className="w-full py-3 rounded-2xl font-bold border border-slate-600 text-slate-300">Aceptar derrota ({tragos} tragos)</button>
               </>
             )}
 
             {(resultado?.tipo === 'derrota' || resultado?.tipo === 'plantado' || (resultado?.tipo === 'fallo' && etapa === 0) || (resultado?.tipo === 'acierto' && etapa === 0 && puntosGanadosEscalera === 0)) && (
-              <button onClick={() => enviarAccion('siguienteTurno')} className="w-full py-4 rounded-2xl font-black bg-slate-700 text-white">Siguiente jugador →</button>
+              <button onClick={() => enviarAccion('siguienteTurno')} className="w-full py-4 rounded-2xl font-black bg-slate-700 text-white active:scale-95 transition-all">Siguiente jugador →</button>
             )}
           </div>
         )}

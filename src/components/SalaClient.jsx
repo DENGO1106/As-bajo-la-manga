@@ -3,6 +3,17 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
+const EVENTOS_SORPRESA = [
+  "Cascada: Empieza a tomar el jugador activo y nadie puede parar hasta que el de su derecha pare.",
+  "Regla del Pulgar: El host pone el pulgar en la mesa, el último en hacerlo toma 2 tragos.",
+  "Misterio: Todos los hombres toman 1 trago.",
+  "Chicas al poder: Todas las mujeres toman 1 trago.",
+  "El jugador activo asigna 3 tragos a quien quiera.",
+  "Cultura Chupística: Marcas de cerveza. El que pierda o repita, toma.",
+  "El piso es lava: El último en levantar los pies toma 2 tragos.",
+  "Salud global: Todos los jugadores chocan copas y toman 1 trago."
+];
+
 export default function SalaClient() {
   const searchParams = useSearchParams();
   const modoInicial = searchParams.get('modo') || 'osc';
@@ -26,6 +37,7 @@ export default function SalaClient() {
   const [cartaActual, setCartaActual] = useState(null);
   const [turnoIdx, setTurnoIdx] = useState(0);
   const [animKey, setAnimKey] = useState(0);
+  const [eventoSorpresa, setEventoSorpresa] = useState(null);
 
   // WebRTC (PeerJS)
   const [peer, setPeer] = useState(null);
@@ -257,6 +269,29 @@ export default function SalaClient() {
     connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta, turnoIdx: nuevoTurno }));
   }, []);
 
+  const banearCarta = useCallback(() => {
+    if (!barajaRef.current || barajaRef.current.length === 0) return;
+    const carta = barajaRef.current[indexRef.current % barajaRef.current.length];
+    indexRef.current += 1;
+    
+    setCartaActual(carta);
+    setAnimKey(k => k + 1);
+    
+    // Avisar a todos, manteniendo el turno actual intacto
+    connListRef.current.forEach(c => c.send({ tipo: 'nueva_carta', carta, turnoIdx: turnoRef.current }));
+  }, []);
+
+  const lanzarEventoManual = useCallback(() => {
+    const evento = EVENTOS_SORPRESA[Math.floor(Math.random() * EVENTOS_SORPRESA.length)];
+    setEventoSorpresa(evento);
+    connListRef.current.forEach(c => c.send({ tipo: 'evento_sorpresa', evento }));
+  }, []);
+
+  const continuarEvento = useCallback(() => {
+    setEventoSorpresa(null);
+    connListRef.current.forEach(c => c.send({ tipo: 'cerrar_evento' }));
+  }, []);
+
   const reiniciarLobby = useCallback(() => {
     setFase('lobby');
     setCartaActual(null);
@@ -306,7 +341,13 @@ export default function SalaClient() {
       setTurnoIdx(data.turnoIdx);
       setAnimKey(k => k + 1);
     }
-  }, []);
+    if (data.tipo === 'evento_sorpresa') {
+      setEventoSorpresa(data.evento);
+    }
+    if (data.tipo === 'cerrar_evento') {
+      setEventoSorpresa(null);
+    }
+  }, [salirDeSala]);
 
   const jugadorActual = jugadores[turnoIdx]?.apodo || '';
   const esMiTurno = jugadores[turnoIdx]?.id === peer?.id;
@@ -471,6 +512,24 @@ export default function SalaClient() {
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-yellow-600/8 rounded-full blur-[100px]"></div>
       </div>
 
+      {eventoSorpresa && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-red-950/90 backdrop-blur-md p-6 text-center animate-fade-in">
+          <div className="w-full max-w-sm glass border-red-500/50 p-8 rounded-3xl shadow-2xl shadow-red-900/50">
+            <h2 className="text-3xl font-black text-red-500 mb-2 animate-pulse">¡ALERTA GLOBAL!</h2>
+            <p className="text-white text-lg font-bold mb-8 leading-snug">{eventoSorpresa}</p>
+            <p className="text-red-300 text-xs uppercase tracking-widest mb-6">Cumplan el castigo antes de seguir</p>
+            
+            {esHost ? (
+              <button onClick={continuarEvento} className="w-full py-4 rounded-2xl font-black text-lg bg-red-600 text-white shadow-lg active:scale-95 transition-all">
+                Continuar con el turno ✓
+              </button>
+            ) : (
+              <p className="text-red-400 text-sm font-bold animate-pulse">Esperando que el Host continúe...</p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="text-center z-10">
         <p className="text-slate-600 text-xs uppercase tracking-widest mb-1 font-bold">Le toca a</p>
         <h2 className="text-4xl md:text-5xl font-black gradient-gold">{jugadorActual}</h2>
@@ -493,9 +552,23 @@ export default function SalaClient() {
 
       <div className="flex flex-col gap-3 w-full max-w-[300px] z-10">
         {(esHost || esMiTurno) ? (
-          <button onClick={() => esHost ? siguienteTurno() : hostConnRef.current?.send({ tipo: 'accion_siguiente' })} className="w-full glass text-white font-black text-base py-4 rounded-2xl active:scale-95 transition-all">
-            {esMiTurno ? 'Siguiente Turno →' : 'Forzar Siguiente →'}
-          </button>
+          <>
+            {esHost && (
+              <button onClick={banearCarta} className="w-full py-2 rounded-xl text-xs font-bold border border-red-900/50 text-red-500 hover:bg-red-950/30 transition-all">
+                🚫 Host: Banear esta carta y sacar otra
+              </button>
+            )}
+            
+            {esHost && !eventoSorpresa && (
+              <button onClick={lanzarEventoManual} className="w-full py-2 mb-2 rounded-xl text-xs font-bold border border-purple-900/50 text-purple-400 hover:bg-purple-950/30 transition-all">
+                ⚡ Host: Disparar Evento Sorpresa
+              </button>
+            )}
+
+            <button onClick={() => esHost ? siguienteTurno() : hostConnRef.current?.send({ tipo: 'accion_siguiente' })} className="w-full glass text-white font-black text-base py-4 rounded-2xl active:scale-95 transition-all">
+              {esMiTurno ? 'Siguiente Turno →' : 'Forzar Siguiente →'}
+            </button>
+          </>
         ) : (
           <div className="glass py-4 text-center rounded-2xl text-sm font-bold text-slate-500">
             Esperando a {jugadorActual}...
