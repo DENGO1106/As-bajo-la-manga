@@ -1,6 +1,6 @@
 ﻿import { getCartas } from '@/lib/notion';
 import SalaClient from '@/components/SalaClient';
-import SinExcusasClient from '@/components/SinExcusasClient';
+import SinExcusasSalaClient from '@/components/SinExcusasSalaClient';
 export const runtime = 'edge';
 
 const DB_MAP = {
@@ -18,9 +18,9 @@ const TITULO_MAP = {
 export default async function SalaPage({ params }) {
   const { modo } = await params;
 
-  // La Ultima Carta: motor propio, modo sala aun no implementado
+  // La Ultima Carta: motor propio conectado a WebRTC
   if (modo === 'escalera') {
-    return <SinExcusasClient />;
+    return <SinExcusasSalaClient />;
   }
 
   const dbId = DB_MAP[modo] || DB_MAP.osc;

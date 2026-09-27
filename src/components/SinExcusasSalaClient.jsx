@@ -1,0 +1,494 @@
+﻿'use client';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+
+// Baraja logic
+const PALOS = ['♣', '♦', '♥', '♠'];
+const COLORES = { '♣': 'negro', '♦': 'rojo', '♥': 'rojo', '♠': 'negro' };
+const FIGURAS = { J: 11, Q: 12, K: 13 };
+const PUNTOS_CARTA = [0, 1, 2, 3, 4];
+
+function generarBaraja() {
+  const cartas = [];
+  const rangos = ['2','3','4','5','6','7','8','9','10','J','Q','K'];
+  for (const palo of PALOS) {
+    for (const rango of rangos) {
+      const valor = FIGURAS[rango] ?? parseInt(rango);
+      cartas.push({ rango, palo, valor, color: COLORES[palo], esPar: valor % 2 === 0, display: `${rango}${palo}` });
+    }
+  }
+  for (let i = cartas.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cartas[i], cartas[j]] = [cartas[j], cartas[i]];
+  }
+  return cartas;
+}
+
+export default function SinExcusasSalaClient() {
+  const router = useRouter();
+  
+  // -- LOBBY STATE --
+  const [faseGlobal, setFaseGlobal] = useState('menu'); // menu | lobby | jugando | fin
+  const [apodo, setApodo] = useState('');
+  const [codigoSala, setCodigoSala] = useState('');
+  const [esHost, setEsHost] = useState(false);
+  const [error, setError] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
+  
+  // -- GAME STATE --
+  const [jugadores, setJugadores] = useState([]);
+  const [turnoIdx, setTurnoIdx] = useState(0);
+  const [escalera, setEscalera] = useState([]);
+  const [cartaActual, setCartaActual] = useState(null);
+  const [etapa, setEtapa] = useState(0);
+  const [tragos, setTragos] = useState(0);
+  const [esperandoRespuesta, setEsperandoRespuesta] = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const [enRevancha, setEnRevancha] = useState(false);
+  const [puntosGanadosEscalera, setPuntosGanadosEscalera] = useState(0);
+  const [cobarde, setCobarde] = useState(false);
+  const [log, setLog] = useState([]);
+
+  // -- WEBRTC STATE --
+  const [peer, setPeer] = useState(null);
+  const connListRef = useRef([]);
+  const hostConnRef = useRef(null);
+  
+  // -- HOST GAME REFS (Source of truth) --
+  const gameStateRef = useRef({
+    faseGlobal: 'menu', jugadores: [], turnoIdx: 0, escalera: [], cartaActual: null,
+    etapa: 0, tragos: 0, esperandoRespuesta: false, resultado: null, enRevancha: false,
+    puntosGanadosEscalera: 0, cobarde: false, log: [], baraja: [], indexBaraja: 0
+  });
+
+  // Sync state to refs for host logic
+  const miIdRef = useRef('');
+
+  // -----------------------------------------------------
+  // BROADCAST (Host -> Peers)
+  // -----------------------------------------------------
+  const broadcastState = (newStateUpdates) => {
+    if (!esHost) return;
+    const nextState = { ...gameStateRef.current, ...newStateUpdates };
+    gameStateRef.current = nextState;
+    
+    // Update local React state
+    setFaseGlobal(nextState.faseGlobal);
+    setJugadores(nextState.jugadores);
+    setTurnoIdx(nextState.turnoIdx);
+    setEscalera(nextState.escalera);
+    setCartaActual(nextState.cartaActual);
+    setEtapa(nextState.etapa);
+    setTragos(nextState.tragos);
+    setEsperandoRespuesta(nextState.esperandoRespuesta);
+    setResultado(nextState.resultado);
+    setEnRevancha(nextState.enRevancha);
+    setPuntosGanadosEscalera(nextState.puntosGanadosEscalera);
+    setCobarde(nextState.cobarde);
+    setLog(nextState.log);
+
+    // Filter out baraja before sending to peers
+    const { baraja, indexBaraja, ...publicState } = nextState;
+    connListRef.current.forEach(c => {
+      if (c.open) c.send({ tipo: 'sync_state', state: publicState });
+    });
+  };
+
+  // -----------------------------------------------------
+  // RED (Conectar, Unirse, Hostear)
+  // -----------------------------------------------------
+  const conectar = async (crear) => {
+    if (!apodo.trim()) return;
+    setError('');
+    setIsConnecting(true);
+    
+    const codigoLimpio = codigoSala.trim().toUpperCase();
+    const codigoFinal = crear ? Math.random().toString(36).substring(2, 6).toUpperCase() : codigoLimpio;
+    
+    setCodigoSala(codigoFinal);
+    setEsHost(crear);
+
+    const { Peer } = await import('peerjs');
+    const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
+    miIdRef.current = peerId;
+    
+    const newPeer = new Peer(peerId, { 
+      debug: 1,
+      secure: true,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+        ]
+      }
+    });
+
+    newPeer.on('open', () => {
+      setPeer(newPeer);
+      if (crear) {
+        // HOST INIT
+        setFaseGlobal('lobby');
+        const initJug = [{ id: peerId, apodo, esHost: true, puntos: -1, turnosJugados: 0 }];
+        broadcastState({ faseGlobal: 'lobby', jugadores: initJug, baraja: generarBaraja(), indexBaraja: 0 });
+        setIsConnecting(false);
+
+        newPeer.on('connection', (conn) => {
+          conn.on('open', () => {
+            connListRef.current.push(conn);
+            const { baraja, indexBaraja, ...publicState } = gameStateRef.current;
+            conn.send({ tipo: 'sync_state', state: publicState });
+            conn.on('data', (data) => manejarMensajeHost(conn, data));
+          });
+          conn.on('close', () => {
+            connListRef.current = connListRef.current.filter(c => c.peer !== conn.peer);
+            const nuevos = gameStateRef.current.jugadores.filter(j => j.id !== conn.peer);
+            broadcastState({ jugadores: nuevos });
+          });
+        });
+      } else {
+        // JUGADOR INIT
+        const conn = newPeer.connect(`ablm-host-${codigoFinal}`, { reliable: true });
+        conn.on('open', () => {
+          hostConnRef.current = conn;
+          setIsConnecting(false);
+          conn.send({ tipo: 'unirse', apodo });
+          conn.on('data', manejarMensajeJugador);
+        });
+        conn.on('error', () => { setError('Error de conexión'); setIsConnecting(false); });
+        conn.on('close', () => { setError('Desconectado del host'); setFaseGlobal('menu'); });
+      }
+    });
+    newPeer.on('error', () => { setError('Código no existe o error de red'); setIsConnecting(false); });
+  };
+
+  const salirDeSala = () => {
+    if (peer) peer.destroy();
+    setPeer(null);
+    setFaseGlobal('menu');
+  };
+
+  // -----------------------------------------------------
+  // MENSAJES JUGADOR -> HOST (Acciones)
+  // -----------------------------------------------------
+  const manejarMensajeHost = useCallback((conn, data) => {
+    if (data.tipo === 'unirse') {
+      const state = gameStateRef.current;
+      if (state.faseGlobal === 'jugando') {
+        conn.send({ tipo: 'rechazado', mensaje: 'Partida en curso' });
+        setTimeout(() => conn.close(), 500);
+        return;
+      }
+      const nuevos = [...state.jugadores, { id: conn.peer, apodo: data.apodo, esHost: false, puntos: -1, turnosJugados: 0 }];
+      broadcastState({ jugadores: nuevos });
+    }
+    if (data.tipo === 'accion') {
+      procesarAccionHost(data.accion, data.payload, conn.peer);
+    }
+  }, []);
+
+  const enviarAccion = (accion, payload = null) => {
+    if (esHost) {
+      procesarAccionHost(accion, payload, miIdRef.current);
+    } else {
+      hostConnRef.current?.send({ tipo: 'accion', accion, payload });
+    }
+  };
+
+  // -----------------------------------------------------
+  // MENSAJES HOST -> JUGADOR (Sincronización)
+  // -----------------------------------------------------
+  const manejarMensajeJugador = useCallback((data) => {
+    if (data.tipo === 'sync_state') {
+      const s = data.state;
+      setFaseGlobal(s.faseGlobal); setJugadores(s.jugadores); setTurnoIdx(s.turnoIdx);
+      setEscalera(s.escalera); setCartaActual(s.cartaActual); setEtapa(s.etapa);
+      setTragos(s.tragos); setEsperandoRespuesta(s.esperandoRespuesta); setResultado(s.resultado);
+      setEnRevancha(s.enRevancha); setPuntosGanadosEscalera(s.puntosGanadosEscalera);
+      setCobarde(s.cobarde); setLog(s.log);
+    }
+    if (data.tipo === 'rechazado') {
+      setError(data.mensaje); salirDeSala();
+    }
+  }, []);
+
+  // -----------------------------------------------------
+  // MOTOR DEL JUEGO (Se ejecuta SÓLO en el Host)
+  // -----------------------------------------------------
+  const procesarAccionHost = (accion, payload, peerId) => {
+    const s = gameStateRef.current;
+    
+    // Verificación de seguridad: Solo el jugador activo o el host pueden accionar
+    const jugadorActivo = s.jugadores[s.turnoIdx];
+    if (!jugadorActivo) return;
+    if (peerId !== jugadorActivo.id && peerId !== miIdRef.current) return;
+
+    // Helpers
+    const sacarCartaHost = () => {
+      let b = s.baraja;
+      let i = s.indexBaraja;
+      if (i >= b.length) { b = generarBaraja(); i = 0; }
+      const c = b[i];
+      s.baraja = b; s.indexBaraja = i + 1;
+      return c;
+    };
+
+    const addLog = (msg) => { s.log = [...s.log.slice(-9), msg]; };
+
+    if (accion === 'iniciarJuego') {
+      if (s.jugadores.length < 1) return; // Permitir 1 para pruebas
+      s.jugadores = s.jugadores.map(j => ({ ...j, puntos: -1, turnosJugados: 0 }));
+      broadcastState({ faseGlobal: 'jugando', baraja: generarBaraja(), indexBaraja: 0, turnoIdx: 0, etapa: 0, log: [] });
+    }
+    
+    if (accion === 'tirarCarta') {
+      const carta = sacarCartaHost();
+      broadcastState({ cartaActual: carta, escalera: [carta], etapa: 1, esperandoRespuesta: true, resultado: null, tragos: 0, puntosGanadosEscalera: 0, enRevancha: false, cobarde: false });
+    }
+
+    if (accion === 'declararCobarde') {
+      addLog(`💛 ${jugadorActivo.apodo} declaró cobarde → 1 trago`);
+      broadcastState({ cobarde: true, resultado: { tipo: 'cobarde', mensaje: `No juega y toma 1 trago 🍺` }, etapa: 0 });
+    }
+
+    if (accion === 'confirmarCobarde' || accion === 'siguienteTurno') {
+      let nj = [...s.jugadores];
+      if (accion !== 'confirmarCobarde') {
+        nj[s.turnoIdx] = { ...nj[s.turnoIdx], puntos: nj[s.turnoIdx].puntos + s.puntosGanadosEscalera, turnosJugados: nj[s.turnoIdx].turnosJugados + 1 };
+      } else {
+        nj[s.turnoIdx] = { ...nj[s.turnoIdx], turnosJugados: nj[s.turnoIdx].turnosJugados + 1 };
+      }
+      
+      const turnosRestantes = nj.reduce((sum, j) => sum + (3 - j.turnosJugados), 0);
+      if (turnosRestantes <= 0) {
+        broadcastState({ faseGlobal: 'fin', jugadores: nj });
+        return;
+      }
+      
+      let sig = (s.turnoIdx + 1) % nj.length;
+      while (nj[sig].turnosJugados >= 3) sig = (sig + 1) % nj.length;
+      
+      broadcastState({ jugadores: nj, turnoIdx: sig, etapa: 0, escalera: [], cartaActual: null, tragos: 0, puntosGanadosEscalera: 0, resultado: null, esperandoRespuesta: false, cobarde: false });
+    }
+
+    if (accion === 'responder') {
+      const acierto = payload.acierto;
+      const etapaNum = payload.etapaNum;
+      
+      if (s.enRevancha) {
+        const puntosEnJuego = PUNTOS_CARTA[etapaNum - 1] || 1;
+        if (acierto) {
+          addLog(`✅ ${jugadorActivo.apodo} ganó revancha: +${puntosEnJuego} pts`);
+          broadcastState({ tragos: 0, puntosGanadosEscalera: s.puntosGanadosEscalera + puntosEnJuego, resultado: { tipo: 'acierto', mensaje: `✅ Revancha ganada (+${puntosEnJuego})` }, esperandoRespuesta: false, enRevancha: false, etapa: 0 });
+        } else {
+          addLog(`❌ ${jugadorActivo.apodo} perdió revancha: -${puntosEnJuego} pts`);
+          broadcastState({ tragos: s.tragos + 1, puntosGanadosEscalera: s.puntosGanadosEscalera - puntosEnJuego, resultado: { tipo: 'fallo', mensaje: `❌ Revancha perdida (-${puntosEnJuego})` }, esperandoRespuesta: false, enRevancha: false, etapa: 0 });
+        }
+        return;
+      }
+
+      if (acierto) {
+        const pts = PUNTOS_CARTA[etapaNum];
+        addLog(`✅ ${jugadorActivo.apodo} acertó carta ${etapaNum}: +${pts} pts`);
+        broadcastState({ puntosGanadosEscalera: s.puntosGanadosEscalera + pts, tragos: Math.max(0, s.tragos - 1), resultado: { tipo: 'acierto', mensaje: `✅ ¡Acierto! +${pts}` }, esperandoRespuesta: false, etapa: etapaNum === 4 ? 0 : etapaNum + 1 });
+      } else {
+        addLog(`❌ ${jugadorActivo.apodo} falló carta ${etapaNum}`);
+        broadcastState({ tragos: s.tragos + 1, resultado: { tipo: 'fallo', mensaje: `❌ Fallo (1 trago)` }, esperandoRespuesta: false, etapa: etapaNum === 4 ? 0 : -etapaNum });
+      }
+    }
+
+    if (accion === 'aceptarDerrota') {
+      broadcastState({ resultado: { tipo: 'derrota', mensaje: `Derrota aceptada (${s.tragos} tragos)` }, etapa: 0 });
+    }
+
+    if (accion === 'plantarse') {
+      broadcastState({ resultado: { tipo: 'plantado', mensaje: `Plantado con ${s.puntosGanadosEscalera} pts` }, etapa: 0 });
+    }
+
+    if (accion === 'tomarRevancha' || accion === 'siguienteCarta') {
+      const carta = sacarCartaHost();
+      if (accion === 'tomarRevancha') {
+        broadcastState({ cartaActual: carta, escalera: [...s.escalera, carta], enRevancha: true, esperandoRespuesta: true, resultado: null, etapa: Math.abs(s.etapa) + 1 });
+      } else {
+        broadcastState({ cartaActual: carta, escalera: [...s.escalera, carta], esperandoRespuesta: true, resultado: null });
+      }
+    }
+
+    if (accion === 'nuevoTorneo') {
+      broadcastState({ faseGlobal: 'lobby' });
+    }
+  };
+
+  // -----------------------------------------------------
+  // RENDER HELPERS
+  // -----------------------------------------------------
+  const BtnRespuesta = ({ onClick, label, emoji, color }) => (
+    <button onClick={onClick} className={`w-full py-4 rounded-2xl font-black border text-lg hover:scale-[1.02] active:scale-95 border-slate-600/40 bg-slate-900/50 text-slate-200`}>
+      {emoji} {label}
+    </button>
+  );
+
+  const miTurno = jugadores[turnoIdx]?.id === peer?.id || esHost; // Host siempre puede clickear (por si alguien no puede)
+  const jugadorActivo = jugadores[turnoIdx] || {};
+
+  // ==========================================
+  // PANTALLA 1: MENU
+  // ==========================================
+  if (faseGlobal === 'menu') {
+    return (
+      <main className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4">
+        <div className="max-w-sm w-full z-10 animate-fade-in text-center">
+          <h2 className="text-4xl font-black gradient-gold mb-1">La Última Carta</h2>
+          <p className="text-slate-500 text-sm mb-6">Modo en Sala · Sincronizado</p>
+          {error && <p className="text-red-400 mb-4 font-bold">{error}</p>}
+          <input type="text" maxLength={15} placeholder="Tu apodo" value={apodo} onChange={e => setApodo(e.target.value)} className="w-full bg-[#020617] border border-slate-800 text-white px-4 py-3 rounded-2xl mb-4 text-center font-bold" />
+          <button onClick={() => conectar(true)} disabled={!apodo.trim()} className="w-full bg-gold text-slate-900 font-black py-3.5 rounded-2xl mb-4">👑 Crear Sala</button>
+          <div className="flex gap-2">
+            <input type="text" maxLength={4} placeholder="CÓDIGO" value={codigoSala} onChange={e => setCodigoSala(e.target.value.toUpperCase())} className="w-1/2 bg-[#020617] border border-slate-800 text-white text-center font-black px-4 py-3 rounded-xl" />
+            <button onClick={() => conectar(false)} disabled={!apodo.trim() || codigoSala.length !== 4 || isConnecting} className="w-1/2 bg-yellow-900/20 text-yellow-400 font-black py-3 rounded-xl">Unirse</button>
+          </div>
+          <Link href="/" className="block mt-6 text-slate-500 text-sm">Volver al inicio</Link>
+        </div>
+      </main>
+    );
+  }
+
+  // ==========================================
+  // PANTALLA 2: LOBBY
+  // ==========================================
+  if (faseGlobal === 'lobby') {
+    return (
+      <main className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4">
+        <div className="max-w-sm w-full z-10 animate-fade-in text-center">
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-1">Código de Sala</p>
+          <h1 className="text-6xl font-black gradient-gold tracking-widest mb-6">{codigoSala}</h1>
+          <div className="glass rounded-2xl p-4 mb-6 text-left">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Jugadores ({jugadores.length})</h3>
+            {jugadores.map(j => <div key={j.id} className="text-white font-bold py-1">{j.apodo} {j.esHost && '👑'}</div>)}
+          </div>
+          {esHost && <button onClick={() => enviarAccion('iniciarJuego')} className="w-full bg-gold text-slate-900 font-black py-4 rounded-2xl mb-4">Iniciar Torneo 🎲</button>}
+          {!esHost && <p className="text-slate-500 text-sm mb-4">Esperando al Host...</p>}
+          <button onClick={salirDeSala} className="text-red-500 text-sm font-bold">Salir de la sala</button>
+        </div>
+      </main>
+    );
+  }
+
+  // ==========================================
+  // PANTALLA 3: JUGANDO / FIN
+  // ==========================================
+  if (faseGlobal === 'fin') {
+    const sorted = [...jugadores].sort((a, b) => b.puntos - a.puntos);
+    return (
+      <div className="min-h-screen p-4 flex flex-col items-center justify-center bg-[#020617]">
+        <h1 className="text-3xl font-black gradient-gold mb-6">Fin del Torneo 🏆</h1>
+        <div className="max-w-sm w-full space-y-3 mb-6">
+          {sorted.map((j, i) => (
+            <div key={j.id} className="glass p-4 rounded-xl flex justify-between">
+              <span className="font-bold text-white">{i === 0 ? '🥇' : i === sorted.length - 1 ? '💀' : `#${i + 1}`} {j.apodo}</span>
+              <span className="font-black text-yellow-400">{j.puntos} pts</span>
+            </div>
+          ))}
+        </div>
+        {esHost && <button onClick={() => enviarAccion('nuevoTorneo')} className="w-full py-4 bg-gold text-slate-900 font-black rounded-xl">Volver al Lobby</button>}
+      </div>
+    );
+  }
+
+  const eReal = enRevancha ? Math.abs(etapa) : etapa;
+  
+  return (
+    <div className="min-h-screen bg-[#020617] p-4 flex flex-col items-center pt-6 pb-24">
+      <div className="max-w-sm w-full space-y-4">
+        <div className="flex justify-between items-center text-xs font-bold text-slate-400">
+          <span>Sala: {codigoSala}</span>
+          <button onClick={salirDeSala} className="hover:text-red-400">Salir</button>
+        </div>
+
+        {/* Turno actual */}
+        <div className="text-center">
+          <p className="text-slate-500 text-xs uppercase tracking-widest">Le toca a</p>
+          <h2 className="text-3xl font-black text-yellow-400">{jugadorActivo.apodo}</h2>
+          {tragos > 0 && <p className="text-red-400 font-bold">🍺 {tragos} tragos acumulados</p>}
+        </div>
+
+        {/* Escalera */}
+        {escalera.length > 0 && (
+          <div className="flex gap-2 justify-center flex-wrap">
+            {escalera.map((c, i) => {
+              const estaOculta = (i === escalera.length - 1) && esperandoRespuesta && !resultado;
+              if (estaOculta) return <div key={i} className="w-14 h-20 rounded-xl border border-yellow-600/50 bg-yellow-900/80 flex items-center justify-center"><span className="text-2xl opacity-50">🃏</span></div>;
+              return (
+                <div key={i} className={`w-14 h-20 rounded-xl border flex flex-col items-center justify-center font-black text-lg ${c.color === 'rojo' ? 'text-red-400 border-red-500/50 bg-red-950/40' : 'text-slate-200 border-slate-600/50 bg-slate-900'}`}>
+                  <span className="text-sm">{c.rango}</span><span>{c.palo}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Carta Grande */}
+        {cartaActual && (
+          <div className={`w-full h-44 rounded-3xl border-2 flex flex-col items-center justify-center shadow-2xl transition-all ${esperandoRespuesta && !resultado ? 'border-yellow-600/50 bg-yellow-900/40' : cartaActual.color === 'rojo' ? 'border-red-500/60 bg-red-950/60' : 'border-slate-600/60 bg-slate-900/80'}`}>
+            {esperandoRespuesta && !resultado ? (
+              <p className="text-6xl opacity-50 animate-pulse">🃏</p>
+            ) : resultado ? (
+              <div className="text-center px-4">
+                <p className={`text-5xl font-black ${cartaActual.color === 'rojo' ? 'text-red-400' : 'text-white'}`}>{cartaActual.rango}{cartaActual.palo}</p>
+                <p className={`text-sm font-bold mt-2 ${resultado.tipo === 'acierto' ? 'text-green-400' : 'text-red-400'}`}>{resultado.mensaje}</p>
+              </div>
+            ) : (
+              <p className={`text-5xl font-black ${cartaActual.color === 'rojo' ? 'text-red-400' : 'text-white'}`}>{cartaActual.rango}{cartaActual.palo}</p>
+            )}
+          </div>
+        )}
+
+        {/* Acciones */}
+        {!miTurno && <p className="text-center text-slate-500 text-sm py-4">Esperando que {jugadorActivo.apodo} juegue...</p>}
+        {miTurno && (
+          <div className="space-y-3">
+            {etapa === 0 && !resultado && (
+              <>
+                <button onClick={() => enviarAccion('tirarCarta')} className="w-full py-5 rounded-2xl font-black text-xl bg-gold text-slate-900">Tirar Carta 🎲</button>
+                <button onClick={() => enviarAccion('declararCobarde')} className="w-full py-3 rounded-2xl font-bold text-slate-500 border border-slate-700">Soy cobarde (1 trago)</button>
+              </>
+            )}
+            
+            {cobarde && resultado?.tipo === 'cobarde' && <button onClick={() => enviarAccion('confirmarCobarde')} className="w-full py-4 rounded-2xl font-black bg-yellow-600 text-slate-900">Confirmar (tomé mi trago)</button>}
+            
+            {esperandoRespuesta && !resultado && (
+              <div className="grid grid-cols-2 gap-3">
+                {eReal === 1 && <><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.esPar, etapaNum: 1})} label="PAR" emoji="2️⃣" /><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: !cartaActual.esPar, etapaNum: 1})} label="IMPAR" emoji="1️⃣" /></>}
+                {eReal === 2 && <><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.valor > escalera[0].valor, etapaNum: 2})} label="MAYOR" emoji="⬆️" /><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.valor < escalera[0].valor, etapaNum: 2})} label="MENOR" emoji="⬇️" /></>}
+                {eReal === 3 && <><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.color === 'rojo', etapaNum: 3})} label="ROJO" emoji="🔴" /><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.color === 'negro', etapaNum: 3})} label="NEGRO" emoji="⚫" /></>}
+                {eReal === 4 && <><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.palo === '♣', etapaNum: 4})} label="TRÉBOL" emoji="♣" /><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.palo === '♦', etapaNum: 4})} label="DIAMANTE" emoji="♦" /><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.palo === '♥', etapaNum: 4})} label="CORAZÓN" emoji="♥" /><BtnRespuesta onClick={() => enviarAccion('responder', {acierto: cartaActual.palo === '♠', etapaNum: 4})} label="PICA" emoji="♠" /></>}
+              </div>
+            )}
+            
+            {resultado?.tipo === 'acierto' && !enRevancha && etapa > 1 && (
+              <>
+                {etapa <= 4 && <button onClick={() => enviarAccion('siguienteCarta')} className="w-full py-4 rounded-2xl font-black bg-green-600 text-white">Seguir apostando 🎯</button>}
+                <button onClick={() => enviarAccion('plantarse')} className="w-full py-3 rounded-2xl font-bold border border-slate-600 text-slate-300">Plantarme con {puntosGanadosEscalera} pts</button>
+              </>
+            )}
+
+            {resultado?.tipo === 'acierto' && etapa === 0 && puntosGanadosEscalera > 0 && (
+               <button onClick={() => enviarAccion('siguienteTurno')} className="w-full py-4 rounded-2xl font-black bg-gold text-slate-900">🎉 Escalera completa. Confirmar turno</button>
+            )}
+
+            {etapa < 0 && !esperandoRespuesta && !resultado?.tipo?.includes('derrota') && (
+              <>
+                {Math.abs(etapa) < 4 && <button onClick={() => enviarAccion('tomarRevancha')} className="w-full py-4 rounded-2xl font-black bg-red-600 text-white">🔄 Tomar Revancha</button>}
+                <button onClick={() => enviarAccion('aceptarDerrota')} className="w-full py-3 rounded-2xl font-bold border border-slate-600 text-slate-300">Aceptar derrota ({tragos} tragos)</button>
+              </>
+            )}
+
+            {(resultado?.tipo === 'derrota' || resultado?.tipo === 'plantado' || (resultado?.tipo === 'fallo' && etapa === 0) || (resultado?.tipo === 'acierto' && etapa === 0 && puntosGanadosEscalera === 0)) && (
+              <button onClick={() => enviarAccion('siguienteTurno')} className="w-full py-4 rounded-2xl font-black bg-slate-700 text-white">Siguiente jugador →</button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
