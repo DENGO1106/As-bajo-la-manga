@@ -1,11 +1,12 @@
-﻿import { Client } from '@notionhq/client';
+export const runtime = 'edge';
+import { Client } from '@notionhq/client';
 
 export async function PATCH(req) {
   try {
     const { password, pageId, nombre, descripcion, tragos, categoria } = await req.json();
 
     if (password !== '!DDeng@01106!') {
-      return new Response(JSON.stringify({ error: 'Contraseña incorrecta' }), { status: 401 });
+      return new Response(JSON.stringify({ error: 'Contrase�a incorrecta' }), { status: 401 });
     }
 
     const notion = new Client({ auth: process.env.NOTION_TOKEN || process.env.NOTION_SECRET });

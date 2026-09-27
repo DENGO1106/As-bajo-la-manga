@@ -1,3 +1,4 @@
+export const runtime = 'edge';
 import { Client } from '@notionhq/client';
 
 export async function POST(req) {
