@@ -168,7 +168,7 @@ export default function SinExcusasSalaClient() {
           });
         });
       } else {
-        const conn = newPeer.connect(`ablm-host-${codigoFinal}`, { reliable: true });
+        const conn = newPeer.connect(`ablm-host-${codigoFinal}`);
         conn.on('open', () => {
           clearTimeout(connectionTimeout);
           hostConnRef.current = conn;

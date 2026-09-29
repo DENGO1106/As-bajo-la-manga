@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -215,7 +215,7 @@ export default function SalaClient() {
 
       } else {
         // JUGADOR
-        const conn = newPeer.connect(`ablm-host-${codigoFinal}`, { reliable: true });
+        const conn = newPeer.connect(`ablm-host-${codigoFinal}`);
         conn.on('open', () => {
           clearTimeout(connectionTimeout);
           hostConnRef.current = conn;
