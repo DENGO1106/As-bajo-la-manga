@@ -122,17 +122,29 @@ export default function SinExcusasSalaClient() {
     const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
     miIdRef.current = peerId;
     
-    const newPeer = new Peer(peerId, { debug: 0 });
+    const newPeer = new Peer(peerId, { 
+      debug: 1,
+      secure: true,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+          { urls: 'stun:stun.miwifi.com:3478' },
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+          { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+        ]
+      }
+    });
 
     let connectionTimeout;
     if (!crear) {
       connectionTimeout = setTimeout(() => {
         if (gameStateRef.current.faseGlobal === 'menu') {
-          setError('Tiempo agotado. Verifica el codigo o tu conexion a internet.');
+          setError('Tiempo de conexion agotado (25s). Revisa tu red o codigo.');
           setIsConnecting(false);
           newPeer.destroy();
         }
-      }, 12000);
+      }, 25000);
     }
 
     newPeer.on('open', () => {
