@@ -123,15 +123,28 @@ export default function SinExcusasSalaClient() {
     miIdRef.current = peerId;
     
     const newPeer = new Peer(peerId, { 
-      debug: 1,
+      debug: 0,
       secure: true,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+          { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
         ]
       }
     });
+
+    let connectionTimeout;
+    if (!crear) {
+      connectionTimeout = setTimeout(() => {
+        if (gameStateRef.current.faseGlobal === 'menu') {
+          setError('Tiempo agotado. Verifica el codigo o tu conexion a internet.');
+          setIsConnecting(false);
+          newPeer.destroy();
+        }
+      }, 12000);
+    }
 
     newPeer.on('open', () => {
       setPeer(newPeer);
@@ -157,16 +170,35 @@ export default function SinExcusasSalaClient() {
       } else {
         const conn = newPeer.connect(`ablm-host-${codigoFinal}`, { reliable: true });
         conn.on('open', () => {
+          clearTimeout(connectionTimeout);
           hostConnRef.current = conn;
           setIsConnecting(false);
           conn.send({ tipo: 'unirse', apodo });
           conn.on('data', manejarMensajeJugador);
         });
-        conn.on('error', () => { setError('Error de conexión'); setIsConnecting(false); });
-        conn.on('close', () => { setError('Desconectado del host'); setFaseGlobal('menu'); });
+        conn.on('error', () => {
+          clearTimeout(connectionTimeout);
+          setError('No se pudo conectar. Verifica el codigo.');
+          setIsConnecting(false);
+          setFaseGlobal('menu');
+        });
+        conn.on('close', () => {
+          if (gameStateRef.current.faseGlobal !== 'menu') {
+            setError('Te desconectaste de la sala.');
+            setFaseGlobal('menu');
+          }
+        });
       }
     });
-    newPeer.on('error', () => { setError('Código no existe o error de red'); setIsConnecting(false); });
+    newPeer.on('error', (err) => {
+      clearTimeout(connectionTimeout);
+      const msg = err?.type === 'unavailable-id'
+        ? 'Ya existe una sala con ese codigo.'
+        : 'Error de conexion. Verifica el codigo o tu WiFi.';
+      setError(msg);
+      setIsConnecting(false);
+      setFaseGlobal('menu');
+    });
   };
 
   const salirDeSala = () => {
