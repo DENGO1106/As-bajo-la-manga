@@ -138,7 +138,7 @@ export default function SalaClient() {
     const { Peer } = await import('peerjs');
     const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
 
-    const newPeer = new Peer(peerId, { debug: 0, secure: true, config: ICE });
+    const newPeer = new Peer(peerId, { debug: 0 });
 
     let connectionTimeout;
     if (!crear) {

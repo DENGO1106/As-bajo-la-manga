@@ -122,18 +122,7 @@ export default function SinExcusasSalaClient() {
     const peerId = crear ? `ablm-host-${codigoFinal}` : `ablm-${codigoFinal}-${Date.now()}`;
     miIdRef.current = peerId;
     
-    const newPeer = new Peer(peerId, { 
-      debug: 0,
-      secure: true,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-          { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
-        ]
-      }
-    });
+    const newPeer = new Peer(peerId, { debug: 0 });
 
     let connectionTimeout;
     if (!crear) {
