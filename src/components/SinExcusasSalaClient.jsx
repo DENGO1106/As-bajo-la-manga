@@ -125,6 +125,7 @@ export default function SinExcusasSalaClient() {
     const newPeer = new Peer(peerId, { 
       debug: 1,
       secure: true,
+      pingInterval: 10000,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -193,9 +194,14 @@ export default function SinExcusasSalaClient() {
     });
     newPeer.on('error', (err) => {
       clearTimeout(connectionTimeout);
-      const msg = err?.type === 'unavailable-id'
-        ? 'Ya existe una sala con ese codigo.'
-        : 'Error de conexion. Verifica el codigo o tu WiFi.';
+      let msg = 'Error desconocido';
+      if (err.type === 'unavailable-id') msg = 'El codigo de sala ya esta en uso.';
+      else if (err.type === 'peer-unavailable') msg = '❌ La sala no existe. Verifica el codigo o que la PC siga en el lobby.';
+      else if (err.type === 'network') msg = '❌ Error de red (WebSocket cerrado por el celular).';
+      else if (err.type === 'server-error') msg = '❌ Error en el servidor de PeerJS.';
+      else if (err.type === 'webrtc') msg = '❌ Tu red celular está bloqueando la conexión (NAT Estricto).';
+      else msg = `Error (${err?.type}): Intenta de nuevo.`;
+      
       setError(msg);
       setIsConnecting(false);
       setFaseGlobal('menu');
